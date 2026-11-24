@@ -1,4 +1,5 @@
 """What was decided on the findings of review 16 of PR 338, beside the reviewer's own tests (test_review16.py)."""
+import json
 import unittest
 from unittest import mock
 
@@ -102,6 +103,108 @@ class EachAlarmAlone(unittest.TestCase):
         del seen[:]
         Alarms16().run_pass(d, alarm, said)
         self.assertEqual(seen, [0], "said again at the next pass, the others not twice")
+
+
+def row(b, px, asset=3):
+    return json.dumps({"b": b, "t": 1_000 * b, "w": 0, "px": {str(asset): px}})
+
+
+class BadRows(unittest.TestCase):
+    """A line that is no line of a journal is a bad line: its block is not in that journal, and the pass goes on."""
+
+    def test_a_line_too_long_nested_too_deep_or_with_a_constant_for_a_number_is_a_bad_line(self):
+        bads = ['{"b":5,"px":{"3":NaN}}', '{"b":5,"w":Infinity,"px":{"3":7}}', '{"b":5,"t":-Infinity,"px":{"3":7}}',
+                '{"b":5,"px":{"3":7},"x":"' + "y" * pr.LINE_MAX + '"}']
+        for bad in bads:
+            for want in (None, {3: [(1, 10)]}):
+                j = pr.Journal(want)
+                j.add_lines([row(4, 7) + "\n", bad + "\n", row(6, 7) + "\n"])
+                self.assertEqual((sorted(j.px[3]), j.bad), ([4, 6], 1), (bad[:30], want))
+        # Brackets nested past the parser's depth: how deep that is goes with the interpreter (RecursionError at about
+        # a thousand on some, a plain syntax error on others), so the parser's answer is given here.
+        real = json.loads
+
+        def loads(text, **kw):
+            if '"deep"' in text:
+                raise RecursionError("maximum recursion depth exceeded")
+            return real(text, **kw)
+        with mock.patch.object(pr.json, "loads", loads):
+            j = pr.Journal()
+            j.add_lines([row(4, 7) + "\n", '{"b":5,"deep":1,"px":{"3":7}}\n', row(6, 7) + "\n"])
+        self.assertEqual((sorted(j.px[3]), j.bad), ([4, 6], 1))
+        for nested in ("[" * 50_000, '{"b":5,"px":{"3":' + "[" * 5_000 + "}}"):
+            j = pr.Journal()
+            j.add_lines([row(4, 7) + "\n", nested + "\n", row(6, 7) + "\n"])
+            self.assertEqual(sorted(j.px[3]), [4, 6], "whichever way the parser refuses it, the lines around it are read")
+        fits = '{"b":5,"px":{"3":7},"x":"' + "y" * (pr.LINE_MAX - 100) + '"}'
+        j = pr.Journal()
+        j.add_lines([fits + "\n"])
+        self.assertEqual((sorted(j.px[3]), j.bad), ([5], 0), "a line within the limit is read")
+
+    def test_a_bad_line_of_the_second_journal_leaves_its_block_on_one_journal(self):
+        j = pr.Journal()
+        j.add_text("\n".join(row(b, 7) for b in (4, 5, 6)) + "\n")
+        j.add_text(row(4, 7) + "\n" + '{"b":5,"t":1,"w":0,"px":{"3":Infinity}}' + "\n" + row(6, 7) + "\n", None, "second")
+        self.assertEqual((j.single_in(3, 4, 6), j.bad), ([5], 1), "held as resting on one journal, never clean")
+
+
+class SecondJournalNotRead(unittest.TestCase):
+    """Whatever goes wrong reading the second journal is that journal not read: its blocks rest on one journal (held),
+    the service says it, and the pass goes on to write its documents."""
+
+    def folder(self):
+        import pathlib
+        import shutil
+        import tempfile
+        from ops.tests.test_price_journals import HEAD
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (d / "second").mkdir()
+        text = json.dumps(HEAD) + "\n" + "\n".join(row(b, 7) for b in (4, 5, 6)) + "\n"
+        (d / "prices-sim1-1970-01-01.jsonl").write_text(text)
+        (d / "second" / "watch-prices-sim1-1970-01-01.jsonl").write_text(text)
+        return d / "prices-sim1.jsonl", d / "second" / "watch-prices-sim1.jsonl", HEAD
+
+    def test_its_reading_raised_and_the_blocks_rest_on_the_keepers_journal_alone(self):
+        from ops import review_service as rs
+        keeper, second, head = self.folder()
+        real = pr.file_lines
+
+        def lines(files):
+            if files and files[0].parent.name == "second":
+                raise RuntimeError("anything at all")
+            return real(files)
+        with mock.patch.object(pr, "file_lines", lines):
+            got = pr.read_journals([keeper, second], head)
+            unread = []
+            with mock.patch.object(rs.core, "log"):
+                self.assertIsInstance(rs.read_prices(keeper, head, second, None, None, None, unread), pr.Journal)
+        self.assertEqual((sorted(got.px[3]), got.single_in(3, 4, 6)), ([4, 5, 6], [4, 5, 6]))
+        self.assertEqual(got.unread, ["watch-prices-sim1.jsonl: RuntimeError"])
+        self.assertIn("was not read to its end (RuntimeError)", got.notes[0])
+        self.assertEqual(unread, got.unread, "the service is told")
+        both = pr.read_journals([keeper, second], head)
+        self.assertEqual((both.unread, both.single_in(3, 4, 6)), ([], []))
+        # The keeper's own journal is the one the review cannot do without: its failure is the pass's, as before.
+        with mock.patch.object(pr, "file_lines", side_effect=RuntimeError("the keeper's")):
+            with self.assertRaises(RuntimeError):
+                pr.read_journals([keeper, second], head)
+
+    def test_the_service_says_it_once_every_six_hours_while_it_lasts(self):
+        from ops import review_service as rs
+        raised, said = [], {}
+        alarm = lambda event, **f: raised.append((event, f["errors"])) or True  # noqa: E731
+        rs.second_unread([], 1_000.0, said, alarm)
+        self.assertEqual((raised, said), ([], {}))
+        rs.second_unread(["w.jsonl: RuntimeError", "w.jsonl: RuntimeError"], 1_000.0, said, alarm)
+        rs.second_unread(["w.jsonl: RuntimeError"], 1_000.0 + rs.REPEAT_S - 1, said, alarm)
+        self.assertEqual(raised, [("second_journal_unread", ["w.jsonl: RuntimeError"])])
+        rs.second_unread(["w.jsonl: RuntimeError"], 1_000.0 + rs.REPEAT_S, said, alarm)
+        self.assertEqual(len(raised), 2)
+        rs.second_unread([], 2_000.0 + rs.REPEAT_S, said, alarm)
+        self.assertNotIn("_second_unread", said, "read again: forgotten, and said anew if it comes back")
+        rs.second_unread(["x"], 5.0, said, lambda event, **f: False)
+        self.assertNotIn("_second_unread", said, "an alarm the channel did not take is not remembered")
 
 
 if __name__ == "__main__":

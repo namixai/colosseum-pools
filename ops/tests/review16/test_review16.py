@@ -45,7 +45,6 @@ class PoisonedRows(unittest.TestCase):
     def test_an_infinite_gap_is_not_a_crash(self):
         self.read('{"gap":[1e999,3],"why":"x"}')
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_a_deeply_nested_line_is_not_a_crash(self):
         self.read("[" * 200_000)
 

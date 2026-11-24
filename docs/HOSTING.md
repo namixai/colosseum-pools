@@ -958,7 +958,11 @@ Each payout held is the alarm `payout_held` with the date it goes out by itself,
 more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
 is `payout_needs_a_stop`, the same way. Each says what can still be done: where the pool would refuse a stop (the
 payout was stopped once already and the stop lifted, or its time to stop is over) the alarm says so and names no
-deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A pass that fails is `review_failed` (once an hour); a pass killed by its
+deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A line of a
+journal longer than 64 KB, nested past the parser's depth or with `Infinity` or `NaN` for a number is a bad line: its
+block is not in that journal. A second journal whose reading fails in any other way is `second_journal_unread`
+(every 6 hours while it lasts): the pass goes on and writes its documents, and the stops standing in the blocks that
+journal did not give are held as resting on one journal. A pass that fails is `review_failed` (once an hour); a pass killed by its
 `TimeoutStartSec` or its `MemoryMax` (1 GB; the journals are read line by line and only the blocks of the stops'
 time are kept, about 6 MB a day of two journals of three assets) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read;

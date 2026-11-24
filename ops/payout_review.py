@@ -904,6 +904,17 @@ class Windows:
 # the parser, which calls the row bad (a number past the interpreter's own limit of digits would raise here).
 _ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d{1,10})\s*[,}]')
 CONFLICT_TEXTS = 50  # the words of a conflict kept a journal asset; every block of one is kept, as a number
+# The longest line of a journal that is parsed: the loop's own lines are about 85 bytes, a gap's a little more. A longer
+# one (the second machine's folder is filled by whoever holds its key) is a bad line, not parsed at all.
+LINE_MAX = 64 * 1024
+
+
+class NotANumber(ValueError):
+    """Infinity or NaN where a journal's number stands: valid for Python's parser, no block, time or price."""
+
+
+def _no_constant(name: str):
+    raise NotANumber(name)
 
 
 def text_lines(text: str):
@@ -947,6 +958,7 @@ class Journal:
         self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}, the first CONFLICT_TEXTS
         self._clash: dict[int, array] = {}  # asset -> every block that disagrees
         self.notes: list[str] = []
+        self.unread: list[str] = []  # the second journal not read to its end, and why (`read_journals`)
         self.sources = 0
         self.want = Windows(want) if want is not None else None
 
@@ -1022,6 +1034,9 @@ class Journal:
         extra_t = (array("q"), array("q"))
         refused = False
         for line in lines:
+            if len(line) > LINE_MAX:
+                self.bad += 1  # too long to be a line of a journal: not parsed
+                continue
             line = line.strip()
             if not line:
                 continue
@@ -1030,7 +1045,10 @@ class Journal:
                 if m and not want.first <= int(m.group(1)) <= want.last:
                     continue  # a row outside every stop's time: not even parsed
             try:
-                row = json.loads(line)
+                row = json.loads(line, parse_constant=_no_constant)
+            except (NotANumber, RecursionError):
+                self.bad += 1  # Infinity or NaN for a number, or brackets nested past the parser's depth
+                continue
             except ValueError:
                 continue  # a write cut short
             if not isinstance(row, dict):
@@ -1064,7 +1082,7 @@ class Journal:
                     raise TypeError("px")
                 if not 0 <= b < U32 or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
                     raise ValueError("out of range")
-            except (TypeError, ValueError, KeyError, IndexError, OverflowError):  # OverflowError: a number like 1e999
+            except (TypeError, ValueError, KeyError, IndexError, OverflowError, RecursionError):  # 1e999 is an OverflowError
                 self.bad += 1  # its block is a hole: no price of it is taken
                 continue
             self.lines += 1
@@ -1196,7 +1214,8 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
                   hi_t: int | None = None, want: dict | None = None) -> "Journal | None":
     """The journals `paths` name, one Journal (`Journal.add_lines` each, line by line): the keeper's and the second
     writer's, of the blocks `want` names only (`Windows`; None, every block). A path with no file of its own and no day
-    file is said in `notes` and adds nothing (its blocks rest on the other alone); None when none of them exists."""
+    file is said in `notes` and adds nothing (its blocks rest on the other alone); None when none of them exists. A
+    second journal whose reading raised is said in `unread` and `notes`, and what it gave before that is kept."""
     j = Journal(want)
     found = False
     for k, path in enumerate(paths):
@@ -1205,9 +1224,18 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
             j.notes.append(f"the journal {path.name} is not there")
             continue
         found = True
-        # The second writer's folder is filled from another machine: only its day files by name, none past the limit.
-        files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)
-        j.add_lines(file_lines(files), expect, path.name)
+        try:
+            # The second writer's folder is filled from another machine: only its day files by name, none past the limit.
+            files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)
+            j.add_lines(file_lines(files), expect, path.name)
+        except Exception as exc:
+            if k == 0:
+                raise
+            # Whatever went wrong reading the second journal is that journal not read, never the end of the pass
+            # (review 16 of #338): the blocks it did not give rest on one journal, which holds their payouts, and the
+            # service says it (`unread`).
+            j.unread.append(f"{path.name}: {type(exc).__name__}")
+            j.notes.insert(0, f"the second journal {path.name} was not read to its end ({type(exc).__name__})")
     return j if found else None
 
 

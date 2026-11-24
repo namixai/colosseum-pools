@@ -167,18 +167,37 @@ def write_status(out: pathlib.Path, status: dict) -> None:
 
 
 def read_prices(path: pathlib.Path, expect: dict | None = None, second: pathlib.Path | None = None,
-                lo_t: int | None = None, hi_t: int | None = None, want: dict | None = None):
+                lo_t: int | None = None, hi_t: int | None = None, want: dict | None = None, unread: list | None = None):
     """The stops' loop's journal and the second writer's (`payout_review.read_journals`: their day files of the stops'
     time, each of this deployment), or None where there is none to read: then no stop is checked in every block, and
-    each payout with a stop is held (`payout_review.stop_doubt`), never passed as clean."""
+    each payout with a stop is held (`payout_review.stop_doubt`), never passed as clean. A second journal whose
+    reading raised is added to `unread` (its blocks rest on one journal; `second_unread` says it)."""
     try:
         got = pr.read_journals([path] + ([second] if second else []), expect, lo_t, hi_t, want)
         if got is None:
             raise FileNotFoundError(path.name)
+        if unread is not None:
+            unread += got.unread
         return got
     except OSError as exc:
         core.log("prices_unread", path=str(path), error=type(exc).__name__, then="every payout with a stop is held")
         return None
+
+
+def second_unread(found: list, now: float, said: dict, alarm) -> None:
+    """The second writer's journal could not be read to its end this pass (`found`, from `read_prices`): an alarm, every
+    REPEAT_S while it lasts. The pass went on: its documents are written, and the stops standing in the blocks that
+    journal did not give are held as resting on one journal."""
+    if not found:
+        said.pop("_second_unread", None)
+        return
+    prev = said.get("_second_unread")
+    if prev is not None and now - prev < REPEAT_S:
+        return
+    if alarm("second_journal_unread", wait=True, errors=sorted(set(found))[:5],
+             why="the second writer's journal of prices could not be read: the payouts whose stops stood in its blocks "
+                 "are held as resting on one journal") is not False:
+        said["_second_unread"] = now
 
 
 def second_stale(path: pathlib.Path | None, now: float, said: dict, alarm, limit: int = 1_800) -> None:
@@ -346,8 +365,9 @@ def main(argv: list[str] | None = None) -> int:
     expect = {"chain": c.CHAIN_ID, "factory": record["SimPoolFactory"], "label": args.deployment}
     second = pathlib.Path(args.prices2) if args.prices2 else None
     prices = None
+    unread: list = []
     if args.prices:
-        prices = lambda lo, hi, want: read_prices(pathlib.Path(args.prices), expect, second, lo, hi, want)  # noqa: E731
+        prices = lambda lo, hi, want: read_prices(pathlib.Path(args.prices), expect, second, lo, hi, want, unread)  # noqa: E731
     bps = args.candle_bps
     if bps is None:
         bps = int(os.environ.get("COLOSSEUM_CANDLE_BPS", "") or
@@ -369,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
                 said["_failed"] = time.time()
         save_said(said_path, said)
         raise
+    second_unread(unread, time.time(), said, alarm)
     second_stale(second, time.time(), said, alarm)
     save_said(said_path, said)
     return 0
@@ -399,7 +420,7 @@ def load_said(path: pathlib.Path) -> dict:
         return {}
     if not isinstance(said, dict):
         return {}
-    for key in ("_failed", "_second"):
+    for key in ("_failed", "_second", "_second_unread"):
         if key in said and (isinstance(said[key], bool) or not isinstance(said[key], (int, float))):
             del said[key]
     return said
