@@ -910,10 +910,15 @@ class TheFirstPool(unittest.TestCase):
         self.assertLessEqual(len(text.encode("utf-8")), d.TERMS_MAX_BYTES)
 
     def test_its_terms_promise_nothing_name_the_network_once_and_one_window_for_both_snapshots(self):
-        """The words of 24 November: no investment and no profit in the text written on chain, the target and the
-        daily loss as two rules, the snapshot's window the contracts' 15 minutes for both rules, and the network."""
+        """The words of 24 November: no investment, no profit, no paper and no simulation in the text written on chain,
+        the target and the daily loss as two rules, the snapshot's window the contracts' 15 minutes for both rules, and
+        the network."""
         text = FIRST["terms_text"]
         self.assertIsNone(re.search(r"invest|profit", text, re.IGNORECASE))
+        # The site shows this text on a pool's page, and the site says neither "paper" nor "simulated" (17 November).
+        self.assertIsNone(re.search(r"paper|simulat", text, re.IGNORECASE))
+        self.assertTrue(text.startswith("Trading exams on Hyperliquid mainnet (HyperEVM). Both stages are trading exams "
+                                        "on nobody's money: no real money is traded in them,"))
         self.assertIn("Each stage also has: a target of the line's percent of the size; a daily loss of no more than "
                       "3 % below the day's first snapshot (equity including open positions, taken in the first 15 "
                       "minutes of the UTC day); leverage at most 10x on BTC and ETH and 5x on SOL;", text)
