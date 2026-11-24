@@ -869,6 +869,9 @@ Its log, one JSON line an event:
 - `sent`: a stop sent, with the pool (`to`), the payout's `id`, the `reason`, the `paired` account and the
   transaction's hash `tx`; `would_send` the same with no key, nothing sent; `send_failed` with the pool's refusal;
 - `stop_not_sent`: a pair found on a payout that was paid or stopped by the time it was read again;
+- `stage_exam_unread`: a paid stage with a pair by its fills whose own exam is not known (a stage and the exam it
+  was started from are no pair, and the pool's `Funded` that names the exam was not in what the node gave), after
+  the pool's events were read again from the deployment's block, once a stage: the payout is judged by the fills alone;
 - `pass_failed`: a pass the node broke off, with its error; the next one comes in 600 seconds.
 
 A stop that was wrong is lifted within 14 days of the stop (a stop not lifted by then is final), and not from the

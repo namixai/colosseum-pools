@@ -30,7 +30,7 @@ def fill(account, asset=3, buy=True, sz=100, t=1_000, tx="0x01"):
 class APair(unittest.TestCase):
     def test_the_same_asset_the_other_side_close_in_time_and_size(self):
         a = fill(A)
-        self.assertEqual(s.pairs([a], [fill(B, buy=False, t=1_600, sz=80, tx="0x02")], 600, 0.2),
+        self.assertEqual(s.pairs([a], [fill(B, buy=False, t=1_600, sz=80, tx="0x02")], 600, 0.2, {}),
                          [(a, fill(B, buy=False, t=1_600, sz=80, tx="0x02"))])
 
     def test_what_is_no_pair(self):
@@ -40,7 +40,23 @@ class APair(unittest.TestCase):
                   fill(B, buy=False, t=1_601),    # too far apart
                   fill(B, buy=False, sz=79),      # too far in size
                   fill(A, buy=False)):            # its own account
-            self.assertEqual(s.pairs([a], [b], 600, 0.2), [], b)
+            self.assertEqual(s.pairs([a], [b], 600, 0.2, {}), [], b)
+
+    def test_a_stage_and_the_exam_it_was_started_from_are_no_pair_either_way_round(self):
+        """An exam passes flat and its trader starts the stage: the sale that closed the exam and the stage's first buy,
+        the same size minutes apart, are one trader going on. Matched, the checker would stop an honest payout."""
+        exam, stage, exam2, stage2 = A, B, C, "0x" + "dd" * 20
+        sold, bought = fill(exam, buy=False, t=1_000, tx="0x0e"), fill(stage, buy=True, t=1_149, tx="0x0f")
+        line = {stage: exam, stage2: exam2}
+        self.assertEqual(s.pairs([bought], [sold, bought], 600, 0.2, line), [], "the stage's fill against its own exam's")
+        self.assertEqual(s.pairs([sold], [sold, bought], 600, 0.2, line), [], "and the exam's against its stage's")
+        self.assertEqual(s.pairs([bought], [sold], 600, 0.2, {}), [(bought, sold)], "two accounts nothing ties are a pair")
+        # Only its own exam: another exam, and the stage of another exam, are matched as any two accounts.
+        other_exam, other_stage = fill(exam2, buy=False, t=1_100, tx="0x10"), fill(stage2, buy=True, t=1_050, tx="0x11")
+        self.assertEqual(s.pairs([bought], [sold, other_exam], 600, 0.2, line), [(bought, other_exam)])
+        self.assertEqual(s.pairs([sold], [bought, other_stage], 600, 0.2, line), [(sold, other_stage)])
+        self.assertTrue(s.one_line(stage, exam, line) and s.one_line(exam, stage, line))
+        self.assertFalse(s.one_line(stage, exam2, line) or s.one_line(exam, exam2, line) or s.one_line(stage, stage2, line))
 
 
 class ALink(unittest.TestCase):
@@ -137,7 +153,7 @@ class TheService(unittest.TestCase):
         ch = s.Checker.__new__(s.Checker)
         ch.start_block, ch.usdc = 10, "0x" + "dd" * 20
         ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
-        ch.fills_from, ch.fills_read = 10, set()
+        ch.fills_from, ch.fills_read, ch.grew_from, ch.line_asked = 10, set(), {}, set()
         ch.settled, ch.started, ch.window_s = set(), {}, 600
         ch.approvals = Before()
         ch.stopped = set()
@@ -148,7 +164,7 @@ class TheService(unittest.TestCase):
         from unittest import mock
         ch = self.checker()
         a, b = (s.to_checksum_address("0x" + x * 20) for x in ("aa", "bb"))
-        ch.keeper = SimpleNamespace(accounts={a: {}})
+        ch.keeper = SimpleNamespace(accounts={a: {}}, pools=[])
         with mock.patch.object(s.c, "rpc", return_value=[]) as rpc:
             ch.read_fills(59)
             ch.keeper.accounts[b] = {}
@@ -245,6 +261,7 @@ class TheService(unittest.TestCase):
         pool, S, Bx, T1, T2 = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "71", "72"))
         ch.keeper = SimpleNamespace(pools=[pool], accounts={})
         ch.tolerance = 0.2
+        ch.grew_from = {S: s.to_checksum_address("0x" + "e0" * 20)}
         ch.fills = [fill(S, buy=True, t=1_000, tx="0x0a"), fill(Bx, buy=False, t=1_100, tx="0x0b")]
         ch.transfers_to = lambda traders, latest: []
         due, asked = 10_000, []
@@ -304,7 +321,7 @@ class TheService(unittest.TestCase):
             if method == "eth_getBlockByNumber":
                 return {"timestamp": hex(45 * day if params[0] == "latest" else times[int(params[0], 16)])}
             q = params[0]
-            if q["topics"][0] != s.sk.FILLED:
+            if s.sk.FILLED not in q["topics"][0]:
                 return []
             return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
                      "topics": [s.sk.FILLED, "0x%064x" % 3],
@@ -337,6 +354,7 @@ class TheService(unittest.TestCase):
         pool, S, Bx, T1, T2, W = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "71", "72", "99"))
         ch.keeper = SimpleNamespace(pools=[pool], accounts={})
         ch.tolerance = 0.2
+        ch.grew_from = {S: s.to_checksum_address("0x" + "e0" * 20)}
         ch.fills = [fill(S, buy=True, t=1_000, tx="0x0a"), fill(Bx, buy=False, t=1_100, tx="0x0b")]
         ch.transfers_to = lambda traders, latest: [
             {"from": pool, "to": T1, "tx": "0xp1"}, {"from": pool, "to": T2, "tx": "0xp2"}] + extra
@@ -352,16 +370,21 @@ class TheService(unittest.TestCase):
 
 class Node:
     """A node of one pool with one payout claimed: the stage S paid, B on the other side of every fill of S. It
-    answers what the checker reads; `down` makes every call fail as a node does that is not there."""
+    answers what the checker reads; `down` makes every call fail as a node does that is not there. S was started from
+    the exam E0, which never traded: the pool wrote its `Funded`, as it does of every stage."""
 
     def __init__(self, pairs=True):
-        self.pool, self.S, self.B, self.T1, self.T2 = (s.to_checksum_address("0x" + x * 20)
-                                                       for x in ("55", "a1", "b1", "71", "72"))
+        self.pool, self.S, self.B, self.T1, self.T2, self.E0 = (s.to_checksum_address("0x" + x * 20)
+                                                                for x in ("55", "a1", "b1", "71", "72", "e0"))
         self.latest, self.now, self.due = 100, 50_000, 300_000
         # account, block, is a buy; a block's time is 1000 + 10 a block.
         self.fills = [(self.S, 30, True), (self.B, 31, not pairs)]
         # account, trader, claimed, due, state (1 Due, 2 Stopped), was stopped, paid at, approved
         self.payouts = [[self.S, self.T1, 800, self.due, 1, False, 0, False]]
+        # The `Funded` events: who wrote it (a pool), the stage, the exam it was started from, the block.
+        self.funded = [(self.pool, self.S, self.E0, 12)]
+        # The trader of each account `result()` is asked of; T2 where none is named.
+        self.traders = {}
         self.down = False
         self.calls = 0
         self.sent = []
@@ -377,14 +400,20 @@ class Node:
         if method != "eth_getLogs":
             return None  # a view or a send: answered by the methods below
         q = params[0]
-        if q["topics"][0] != s.sk.FILLED:
+        if s.sk.FILLED not in q["topics"][0]:
             return []  # no USDC moved: reason 1
+        lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
+        word = lambda a: "0x" + "00" * 12 + a[2:].lower()  # noqa: E731
+        # The fills of the accounts asked for, and the `Funded` of each address asked for that wrote one (the pool).
         return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
                  "topics": [s.sk.FILLED, "0x%064x" % 3],
                  "data": "0x" + encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"],
                                        [buy, 100, 0, 0, 0, 0]).hex()}
-                for a, b, buy in self.fills
-                if a in q["address"] and int(q["fromBlock"], 16) <= b <= int(q["toBlock"], 16)]
+                for a, b, buy in self.fills if a in q["address"] and lo <= b <= hi] + \
+               [{"address": by, "blockNumber": hex(b), "transactionHash": "0x%064x" % (1_000 + b),
+                 "topics": [s.sk.FUNDED, word(stage), word(exam), word(self.T1)], "data": "0x"}
+                for by, stage, exam, b in self.funded
+                if s.sk.FUNDED in q["topics"][0] and by in q["address"] and lo <= b <= hi]
 
     def view(self, to, sig, out="uint256", types=(), args=()):
         self.rpc("eth_call")
@@ -396,7 +425,7 @@ class Node:
         if sig == "approver()":
             return ("0x" + "99" * 20,)  # a pool with payout approval
         if sig == "result()":
-            return (2, self.T2, 0, 0)
+            return (2, self.traders.get(to, self.T2), 0, 0)
         return (2, 1, False)  # accountOf: not done
 
     def transact(self, wallet, to, sig, types, args):
@@ -601,7 +630,7 @@ class TheLoop(unittest.TestCase):
         state = {"n": 0}
 
         def rpc(method, params=()):
-            if method == "eth_getLogs" and params[0]["topics"][0] == s.sk.FILLED:
+            if method == "eth_getLogs" and s.sk.FILLED in params[0]["topics"][0]:
                 state["n"] += 1
                 if state["n"] == 3:
                     raise RuntimeError("timeout")
@@ -636,6 +665,189 @@ class TheLoop(unittest.TestCase):
         node.down = True
         with self.on(node), mock_print():
             self.assertEqual(s.run(self.checker(node, dry=True), 600, once=True, sleep=lambda t: None), 1)
+
+    def own_exam(self):
+        """The node of a stage S whose own exam E was bought at block 20 and sold flat at block 29, where the pool
+        wrote `Funded(S, E, trader)`; S's first buy, the same size, comes at block 30, ten seconds after that sale. By
+        the fills alone the two are a pair. B, another trader's exam, is on S's side: a copy, no pair."""
+        node = Node(pairs=False)
+        node.E = s.to_checksum_address("0x" + "e1" * 20)
+        node.fills = [(node.E, 20, True), (node.E, 29, False), (node.S, 30, True), (node.B, 31, True)]
+        node.funded = [(node.pool, node.S, node.E, 29)]
+        node.traders = {node.E: node.T1}
+        return node
+
+    def checker_of(self, node, dry=False, **more):
+        ch = self.checker(node, dry)
+        ch.keeper.accounts[node.E] = {"pool": node.pool, "kind": "exam"}
+        ch.keeper.accounts.update({a: {"pool": node.pool, "kind": kind} for a, kind in more.items()})
+        return ch
+
+    def test_a_stage_whose_first_fill_follows_its_own_exams_last_is_never_stopped(self):
+        """Found on a copy of the network: an exam passed, its stage entered with the same size 149 seconds after the
+        exam's closing sale, and the checker would have stopped the honest trader's payout for a pair with their own
+        exam. Which exam a stage was started from is the pool's `Funded`, read in the calls the fills are read in."""
+        for dry in (False, True):
+            node = self.short_node()
+            del node.short[:]
+            ch = self.checker_of(node, dry)
+            with self.on(node):
+                self.assertEqual(ch.one_pass(), [], dry)
+                self.assertEqual(ch.one_pass(), [], dry)
+            self.assertEqual(ch.grew_from, {node.S: node.E})
+            self.assertEqual(len(ch.fills), 4, "every fill is read as before")
+            self.assertEqual({a for a, _ in node.asked}, {(node.S, node.B, node.E, node.pool)},
+                             "the pool in the calls of the accounts' fills, and in none of its own")
+            self.assertEqual(node.sent, [])
+            self.assertEqual([self.events(e) for e in ("pair_found", "would_send", "sent")], [[], [], []], dry)
+        # The same fills where the stage was started from another exam: two accounts, a pair, stopped as before.
+        node = self.own_exam()
+        node.funded = [(node.pool, node.S, node.E0, 12)]
+        ch = self.checker_of(node)
+        with self.on(node):
+            stops = ch.one_pass()
+        self.assertEqual([(x["id"], x["reason"], x["paired"]) for x in stops], [(0, 1, node.E)])
+        self.assertEqual(len(node.sent), 1)
+
+    def test_another_exam_of_the_same_trader_and_an_account_of_another_trader_are_pairs_as_before(self):
+        """Only the exam the stage was started from is left out. A second exam of the same trader sold against the
+        stage's buy is a pair (one person on two accounts), and so is another trader's exam or stage."""
+        E2, X, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("e2", "f1", "a2"))
+        for other, kind, trader in ((E2, "exam", "T1"), (X, "exam", "T2"), (S2, "stage", "T2")):
+            node = self.own_exam()
+            node.fills.append((other, 31, False))  # a sale of the same size ten seconds after the stage's buy
+            node.traders[other] = getattr(node, trader)
+            # The other stage has an exam of its own, B: its line is not this stage's.
+            node.funded.append((node.pool, S2, node.B, 28))
+            ch = self.checker_of(node, **{other: kind})
+            with self.on(node):
+                stops = ch.one_pass()
+            self.assertEqual([(x["id"], x["reason"], x["paired"]) for x in stops], [(0, 1, other)], kind)
+            self.assertEqual([(to, args[:3]) for to, _, args in node.sent], [(node.pool, [0, 1, other])], kind)
+            self.assertEqual(ch.grew_from, {node.S: node.E, S2: node.B})
+
+    def test_the_exam_of_a_stage_is_known_when_the_pool_wrote_it_after_the_exams_fills_were_read(self):
+        """Pass one reads the exam's fills up to block 25, and the pool with them. The pool writes `Funded` at block
+        29 and the scan finds the stage in pass two: the stage is read from the deployment's block, the pool from
+        where it was read to, and what it wrote since is there before anything is matched."""
+        node = self.short_node()
+        del node.short[:]
+        ch = self.checker_of(node)
+        payouts, node.payouts, node.latest = node.payouts, [], 25
+        del ch.keeper.accounts[node.S]
+        ch.keeper.next_block = 26
+        with self.on(node):
+            self.assertEqual(ch.one_pass(), [])
+            self.assertEqual((ch.grew_from, ch.fills_from), ({}, 26))
+            self.assertIn(node.pool, ch.fills_read)
+            node.payouts, node.latest = payouts, 100
+            ch.keeper.accounts[node.S] = {"pool": node.pool, "kind": "stage"}
+            ch.keeper.next_block = 101
+            del node.asked[:]
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(ch.grew_from, {node.S: node.E})
+        self.assertEqual((node.sent, self.events("pair_found")), ([], []))
+        self.assertEqual({frozenset(a) for a, _ in node.asked}, {frozenset({node.E, node.B, node.pool}), frozenset({node.S})},
+                         "the pool with the accounts read before, the stage from the start: no read of the pool alone")
+
+    def test_a_funded_written_by_anything_but_a_pool_of_the_factory_ties_no_accounts(self):
+        """The addresses asked are the factory's pools and their accounts. `Funded` is a pool's word: the same topic
+        from an account ties nothing, and the pair stands."""
+        node = Node()  # S bought at block 30, B sold at block 31: a pair
+        node.funded.append((node.B, node.S, node.B, 29))
+        ch = self.checker(node)
+        with self.on(node):
+            stops = ch.one_pass()
+        self.assertEqual([(x["id"], x["paired"]) for x in stops], [(0, node.B)])
+        self.assertEqual(ch.grew_from, {node.S: node.E0})
+
+    def short_node(self):
+        """The node of `own_exam` that gives the pool's `Funded` short while `short` holds anything, as a node behind
+        the head answers its newest blocks; `asked` keeps each read of logs, its addresses and its first block."""
+        node = self.own_exam()
+        node.short, node.asked = [True], []
+        real = node.rpc
+
+        def rpc(method, params=()):
+            got = real(method, params)
+            if method == "eth_getLogs":
+                node.asked.append((tuple(params[0]["address"]), int(params[0]["fromBlock"], 16)))
+                if node.short:
+                    got = [l for l in got if l["topics"][0] != s.sk.FUNDED]
+            return got
+
+        node.rpc = rpc
+        return node
+
+    def test_a_stage_whose_funded_the_node_gave_short_has_its_pool_read_again_before_anything_is_stopped(self):
+        """Every stage has its pool's `Funded`. A node behind the head answered the pool's newest blocks without it
+        while the exam's and the stage's fills were read; the payout is claimed later. Its stage has no exam known and
+        a pair by the fills, which may be with that exam: the pool is read again from the deployment's block first."""
+        node = self.short_node()
+        ch = self.checker_of(node)
+        payouts, node.payouts = node.payouts, []
+        with self.on(node):
+            self.assertEqual(ch.one_pass(), [])
+            self.assertEqual((ch.grew_from, len(ch.fills)), ({}, 4), "the fills are there, the pool's word is not")
+            node.payouts = payouts
+            del node.short[:], node.asked[:]
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(ch.grew_from, {node.S: node.E})
+        self.assertEqual([a for a in node.asked if a[0] == (node.pool,)], [((node.pool,), 10), ((node.pool,), 60)],
+                         "the pool alone, from the deployment's block to the head")
+        self.assertEqual((node.sent, self.events("pair_found"), self.events("stage_exam_unread")), ([], [], []))
+
+    def test_a_stage_whose_exam_stays_unknown_is_said_and_judged_by_the_fills_alone_the_pool_read_again_once(self):
+        """The pool read again and its `Funded` still not there: said, and the pair stops the payout as a pair of any
+        two accounts does (a stop not sent is a payout gone). The pool is read again once a stage, not at every look."""
+        node = self.short_node()
+        ch = self.checker_of(node)
+        with self.on(node):
+            ch.read_fills(node.latest)
+            del node.asked[:]
+            for _ in range(3):
+                self.assertEqual(ch.check(node.pool, 0, node.now, node.latest), (1, node.E, ["0x%064x" % 30, "0x%064x" % 29], []))
+        self.assertEqual([a for a in node.asked if a[0] == (node.pool,)], [((node.pool,), 10), ((node.pool,), 60)])
+        self.assertEqual([(l["pool"], l["id"], l["stage"]) for l in self.events("stage_exam_unread")], [(node.pool, 0, node.S)])
+        self.assertEqual(ch.line_asked, {node.S})
+
+    def test_a_pool_is_read_in_the_accounts_calls_and_costs_none_of_its_own(self):
+        """The pools' `Funded` ride in the calls that read the fills. A pool with no account yet, or one found while no
+        new account is, is read by no call of its own (a read from the deployment's block is 20 calls a thousand
+        blocks): it goes with the next accounts read from there, which every stage is."""
+        node = Node()
+        ch = self.checker(node)
+        accounts, P2 = ch.keeper.accounts, s.to_checksum_address("0x" + "56" * 20)
+        asked = []
+        real = node.rpc
+
+        def rpc(method, params=()):
+            if method == "eth_getLogs":
+                asked.append((tuple(params[0]["address"]), int(params[0]["fromBlock"], 16)))
+            return real(method, params)
+
+        node.rpc = rpc
+        with self.on(node):
+            ch.keeper.accounts = {}
+            ch.read_fills(100)
+            self.assertEqual((asked, ch.fills_read, ch.fills_from), ([], set(), 101), "no account: nothing asked")
+            ch.keeper.accounts = accounts
+            ch.read_fills(120)
+            self.assertEqual({a for a, _ in asked}, {(node.S, node.B, node.pool)}, "the pool in the accounts' calls")
+            self.assertEqual(min(lo for _, lo in asked), 10, "from the deployment's block, as they are")
+            self.assertEqual(ch.fills_read, {node.S, node.B, node.pool})
+            del asked[:]
+            ch.keeper.pools.append(P2)
+            ch.read_fills(140)
+            self.assertEqual(asked, [((node.S, node.B, node.pool), 121)], "a pool found alone waits: one call, the new blocks")
+            self.assertNotIn(P2, ch.fills_read)
+            del asked[:]
+            new = s.to_checksum_address("0x" + "c7" * 20)
+            ch.keeper.accounts[new] = {"pool": P2, "kind": "exam"}
+            ch.read_fills(150)
+        self.assertEqual(sorted(set(asked)), sorted({((node.S, node.B, node.pool), 141)} |
+                                                    {((new, P2), lo) for lo in range(10, 151, 50)}))
+        self.assertEqual(ch.fills_read, {node.S, node.B, node.pool, new, P2})
 
     def test_the_checker_never_lifts_a_stop(self):
         """Lifting a stop is the factory's operator's (SimPool.liftStop; `deploy_sim lift` for our Safe): the checker's

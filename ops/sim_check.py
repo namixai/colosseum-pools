@@ -16,7 +16,10 @@ size? That is the pair: two accounts, a long and a short, one of them passes on 
               pays out of funds thousands of strangers.
 
 Copying a signal is no reason: the same side on two accounts is not a pair. Breaking a stage's
-rules is no reason either: that stage ends at once and never pays.
+rules is no reason either: that stage ends at once and never pays. A stage and the exam it was started
+from are no pair, ever: one trader's one line, the exam flat and over before its stage begins (the
+pool's `Funded(stage, exam, trader)` says which exam; two exams of one trader, or an exam and another
+exam's stage, are matched as any two accounts).
 
 Everything it reads is on chain, and so is everything it writes: the reason, the other account,
 the hashes. Anyone can run this script on the same blocks and get the same pairs. It stops a payout
@@ -39,8 +42,10 @@ stopped; a payout it stopped, or would have, it does not take up again while it 
 payout anyway. A pass the node fails is logged (`pass_failed`) and the next one comes on time. A read the node breaks
 off (the fills of the accounts, or one trader's transfers) is dropped whole and read again from the same block in the
 next pass, so nothing is counted twice; what was read whole before the failure is kept. A node whose head is behind
-what was read already is read nothing from. Its calls start --rpc-gap seconds apart at least, 1 by default, to leave
-the node's allowance to the keeper.
+what was read already is read nothing from. The pools' `Funded` (which exam each stage was started from) are read in
+the calls of the fills; a paid stage with a pair and no exam known has its pool read again from the deployment's block,
+once, before anything is stopped (`stage_exam_unread` if it is still not there: judged by the fills alone). Its calls
+start --rpc-gap seconds apart at least, 1 by default, to leave the node's allowance to the keeper.
 Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
 --confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py).
 """
@@ -148,14 +153,29 @@ def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
 
 # ── what is a pair, from what was read ───────────────────────────────────────────────
 
-def pairs(paid: list[dict], others: list[dict], window_s: int, tolerance: float) -> list[tuple[dict, dict]]:
+def one_line(a: str, b: str, grew_from: dict[str, str]) -> bool:
+    """Whether accounts `a` and `b` are one trader's one line: a stage and the exam it was started from, either way
+    round. `grew_from` is {stage: exam}, as the pools' `Funded(stage, exam, trader)` say it (SimPool.fund: the exam's
+    own trader, once it passed, and one stage an exam)."""
+    return (a in grew_from and grew_from[a] == b) or (b in grew_from and grew_from[b] == a)
+
+
+def pairs(paid: list[dict], others: list[dict], window_s: int, tolerance: float,
+          grew_from: dict[str, str]) -> list[tuple[dict, dict]]:
     """Every fill of the paid account matched with a fill of another account on the same asset, the
     other side, within `window_s` seconds and sizes within `tolerance` (0.2: the smaller at least 80 %
-    of the larger). A fill is {account, asset, buy, sz, t, tx}."""
+    of the larger). A fill is {account, asset, buy, sz, t, tx}.
+
+    Never a stage with the exam it was started from (`grew_from`, {stage: exam}; `one_line`): an exam passes flat
+    (PaperExam.graduate) and trades no more, so the sale that closed it and the stage's first buy minutes later are
+    one trader going on, not two positions against each other. The checker and the review both match through here,
+    each with the pools' `Funded` as it read them."""
     out = []
     for a in paid:
         for b in others:
             if b["account"] == a["account"] or b["asset"] != a["asset"] or b["buy"] == a["buy"]:
+                continue
+            if one_line(a["account"], b["account"], grew_from):
                 continue
             if abs(b["t"] - a["t"]) > window_s:
                 continue
@@ -246,9 +266,14 @@ class Checker:
         self.keeper = sk.SimKeeper(self.factory, None, sender, True, state_path, int(record["block"]))
         self.start_block = int(record["block"])
         self.fills_from = self.start_block
-        # The accounts whose fills are read up to `fills_from`; one found later is read from the start (review of #271).
+        # The accounts whose fills are read up to `fills_from`, and the pools read with them; one found later is read
+        # from the start (review of #271).
         self.fills_read: set[str] = set()
         self.fills: list[dict] = []
+        # The exam each stage was started from, {stage: exam}: the pools' `Funded`, read in the same calls as the fills.
+        self.grew_from: dict[str, str] = {}
+        # The paid stages whose pool was read again for a `Funded` the first reading did not give (`check`): once each.
+        self.line_asked: set[str] = set()
         self._times: dict[int, int] = {}
         # USDC transfers to each trader read so far, and the block to read on from (review of cp#264).
         self.transfers: dict[str, list[dict]] = {}
@@ -285,7 +310,12 @@ class Checker:
     def read_fills(self, latest: int) -> None:
         """Every fill of the factory's accounts up to `latest`. The keeper's scan finds accounts a few windows at a
         time, so an account it finds later has fills from before the cursor: it is read from the deployment's
-        block, once, and then with the others."""
+        block, once, and then with the others.
+
+        The pools are read in the same calls, for their `Funded` alone (`grew_from`: which exam each stage was started
+        from; the keeper's scan keeps the stage and not its exam). A pool is read from the deployment's block with the
+        first accounts read from there after it is known, and with the others from then on: a stage is such an account
+        itself, so its pool's `Funded` is read no later than its own fills, and a pool costs no call of its own."""
         if latest < self.fills_from - 1:
             # A node behind the head already read (another node behind a balancer, or one catching up): nothing is read
             # from it, and the cursor stays where it is; moved back, it would read kept fills a second time.
@@ -293,21 +323,32 @@ class Checker:
             return
         accounts = list(self.keeper.accounts)
         new = [a for a in accounts if a not in self.fills_read]
+        if new:
+            new += [p for p in self.keeper.pools if p not in self.fills_read]
         # Kept only once both reads are whole: a read the node breaks off is read again from the same place in the
         # next pass, and a fill kept from the broken one would be counted twice.
-        got = self._read_fills([a for a in accounts if a in self.fills_read], self.fills_from, latest)
+        got = self._read_fills([a for a in [*accounts, *self.keeper.pools] if a in self.fills_read], self.fills_from, latest)
         got += self._read_fills(new, self.start_block, latest)
         self.fills += got
         self.fills_read.update(new)
         self.fills_from = latest + 1
 
     def _read_fills(self, accounts: list[str], lo: int, latest: int) -> list[dict]:
+        """The fills of `accounts` in the blocks `lo` to `latest`. A pool among them gives its `Funded`, kept in
+        `grew_from` as they come (a stage's exam is the same however often it is read); from any other address a
+        `Funded` is nothing."""
         got = []
+        pools = set(self.keeper.pools)
         while accounts and lo <= latest:
             hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
             for i in range(0, len(accounts), ADDRESS_BATCH):
-                for l in c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [sk.FILLED],
+                for l in c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [[sk.FILLED, sk.FUNDED]],
                                                 "fromBlock": hex(lo), "toBlock": hex(hi)}]):
+                    if l["topics"][0] == sk.FUNDED:
+                        if to_checksum_address(l["address"]) in pools:
+                            stage, exam = (to_checksum_address("0x" + t[-40:]) for t in l["topics"][1:3])
+                            self.grew_from[stage] = exam
+                        continue
                     got.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
             lo = hi + 1
         return got
@@ -366,7 +407,17 @@ class Checker:
         if not stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now, self.until_paid(pool)):
             return None
         mine = [f for f in self.fills if f["account"] == account]
-        found = pairs(mine, self.fills, self.window_s, self.tolerance)
+        found = pairs(mine, self.fills, self.window_s, self.tolerance, self.grew_from)
+        if found and account not in self.grew_from and account not in self.line_asked:
+            # Every stage has its pool's `Funded`, and this one's is not in what the node gave (a node behind the head
+            # answers the newest blocks short): its exam is not known, and the pair may be with that exam. The pool's
+            # are read again from the deployment's block, once a stage, before anything is stopped. Still not there, it
+            # is said, and the payout is judged by the fills alone, as a stop not sent is a payout gone.
+            self._read_fills([pool], self.start_block, latest)
+            self.line_asked.add(account)
+            if account not in self.grew_from:
+                log("stage_exam_unread", pool=pool, id=pid, stage=account)
+            found = pairs(mine, self.fills, self.window_s, self.tolerance, self.grew_from)
         if not found:
             return None
         paired = finding(found, [])[1]

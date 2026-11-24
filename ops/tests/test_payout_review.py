@@ -262,6 +262,73 @@ class APairInTheFactory(unittest.TestCase):
         self.assertEqual(got["tx"]["kind"], "stop")
 
 
+class AStageAndItsOwnExam(unittest.TestCase):
+    """An exam passes flat and its trader starts the stage. The sale that closed the exam and the stage's first buy, the
+    same size minutes apart, are one trader going on, never a pair: found on a copy of the network, where the review
+    called an honest payout suspicious for a pair with the trader's own exam, and offered its stop."""
+
+    def world(self):
+        ch, t1, s1 = honest_world()
+        e1 = addr(0x201)
+        ch.fill(e1, buy=True, sz=100, t=49_000)
+        ch.fill(e1, buy=False, sz=100, t=49_851)  # the exam's closing sale, 149 s before the stage's first buy
+        bought = next(f["tx"] for f in ch.d["fills"] if f["account"] == s1 and f["buy"])
+        return ch, t1, e1, s1, bought
+
+    def test_the_stages_first_fill_after_its_own_exams_last_is_no_pair_and_the_payout_is_clean(self):
+        ch, t1, e1, s1, _ = self.world()
+        mine = [f for f in ch.d["fills"] if f["account"] == s1]
+        self.assertEqual([b["account"] for _, b in chk.pairs(mine, ch.d["fills"], 600, 0.2, {})], [e1],
+                         "by the fills alone, on two accounts nothing ties, it is a pair")
+        self.assertEqual(r.grew_from(ch.d), {s1: e1})
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["exam"], e1)
+        self.assertEqual(got["pairs"], {"stage": [], "exam": []})
+        self.assertIsNone(got["stop"])
+        self.assertEqual((got["verdict"], got["action"], got["reasons"]), ("clean", "approve", []))
+        self.assertEqual(got["tx"]["kind"], "approve")
+        self.assertEqual(got["code"]["paired"], 0, "nor is the trader counted among the code's buyers in a pair")
+        card = r.card(got, ch.d)
+        self.assertEqual((card["verdict"], card["action"], card["reasons"], card["evidence"]["pairs"]),
+                         ("clean", "approve", [], []))
+
+    def test_another_exam_of_the_same_trader_against_the_stage_is_a_pair_as_before(self):
+        """One person on two accounts: a second exam of the trader's own, sold against the stage's buy. The stop names
+        that exam and the two fills, and nothing of the exam the stage was started from."""
+        ch, t1, e1, s1, bought = self.world()
+        e2 = ch.sale(t1, addr(0x202))
+        sold = ch.fill(e2, buy=False, sz=100, t=50_100)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(x["account"], x["trader"]) for x in got["pairs"]["stage"]], [(e2, t1)])
+        self.assertEqual(got["pairs"]["exam"], [])
+        self.assertEqual(got["stop"], {"on": "stage", "by": "pair", "reason": 1, "paired": e2, "pairedTrader": t1,
+                                       "trades": [bought, sold], "links": []})
+        self.assertEqual((got["verdict"], got["action"]), ("suspicious", "stop"))
+        self.assertEqual(got["reasons"][0], f"pair on the stage with {e2}")
+
+    def test_the_exam_of_one_trader_against_the_stage_of_another_is_a_pair_as_before(self):
+        t9, e9, s9 = addr(0x199), addr(0x299), addr(0x399)
+        # Trader 9's exam against trader 1's stage.
+        ch, t1, e1, s1, bought = self.world()
+        ch.sale(t9, e9)
+        ch.stage(t9, e9, s9, status="Active", done=False)
+        sold = ch.fill(e9, buy=False, sz=100, t=50_100)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stop"]["on"], got["stop"]["paired"], got["stop"]["pairedTrader"], got["stop"]["trades"]),
+                         ("stage", e9, t9, [bought, sold]))
+        # Trader 1's exam against trader 9's stage.
+        ch, t1, e1, s1, _ = self.world()
+        ch.sale(t9, e9)
+        ch.stage(t9, e9, s9, status="Active", done=False)
+        mine = ch.fill(e1, buy=False, sz=100, t=1_200, asset=5)
+        theirs = ch.fill(s9, buy=True, sz=100, t=1_250, asset=5)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["pairs"]["stage"], [])
+        self.assertEqual((got["stop"]["on"], got["stop"]["paired"], got["stop"]["pairedTrader"], got["stop"]["trades"]),
+                         ("exam", s9, t9, [mine, theirs]))
+        self.assertEqual(got["verdict"], "suspicious")
+
+
 class MirroredAccounts(unittest.TestCase):
     """Positions held against positions, whatever the timing and size of the fills: the stage of trader 1 is
     long 100 of asset 7 for ten hours; trader 9's exam in the factory's other pool does something meanwhile."""
