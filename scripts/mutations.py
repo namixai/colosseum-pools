@@ -3710,7 +3710,7 @@ MUTATIONS = [
      '      sharedPool: "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",',
      ["the shared page with no address opens the live deployment's shared pool, as its record names it"]),
     ('PJ17', 'app/lib/shared.js',
-     'export const SHARED_POOL = liveDeployment().sharedPool;',
+     'export const SHARED_POOL = liveDeployment()?.sharedPool;',
      'export const SHARED_POOL = "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0";',
      ["the shared page with no address opens the live deployment's shared pool, as its record names it"]),
     ('PJ18', 'app/lib/shared.js',
