@@ -17304,8 +17304,8 @@ MUTATIONS = [
      "    if False:\n        before()\n",
      ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
     ("SK241", "ops/deploy_sim.py",
-     "        review_check(reviews, pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time, hint)",
-     "        review_check(reviews, pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), latest, now, hint)",
+     "        review_check(reviews, pool_, payouts_now, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time, hint)",
+     "        review_check(reviews, pool_, payouts_now, ids, int(c.rpc(\"eth_chainId\"), 16), latest, now, hint)",
      ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
     # `approve` without --reviews: its own default folder, said, with where the host's reviews are when it holds none.
     ("SK242", "ops/deploy_sim.py",
@@ -17723,6 +17723,20 @@ MUTATIONS = [
      "        return {\"buyers\": int(left[\"buyers\"]), \"blocks\": int(left[\"blocks\"])}\n    except (TypeError, KeyError, ValueError):",
      "        return left\n    except (TypeError, KeyError, ValueError):",
      ["test_status_json_says_how_far_the_reading_is_in_two_numbers_and_nothing_else_of_it"]),
+    # `approve` asks the pool again for its payouts and its approver once the send is confirmed, and holds the reviews
+    # to the payouts as it answers them then.
+    ("SK256", "ops/deploy_sim.py",
+     "        try:\n            approve_check(approver_now, sender, payouts_now, ids, hard)\n        except SystemExit as exc:",
+     "        try:\n            pass\n        except SystemExit as exc:",
+     ["test_approve_reads_the_payouts_again_after_the_confirmation_and_before_it_sends"]),
+    ("SK257", "ops/deploy_sim.py",
+     "        approver_now, payouts_now = approval_state(pool_, ids)",
+     "        approver_now, payouts_now = approver, payouts",
+     ["test_approve_reads_the_payouts_again_after_the_confirmation_and_before_it_sends"]),
+    ("SK258", "ops/deploy_sim.py",
+     "        review_check(reviews, pool_, payouts_now, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time, hint)",
+     "        review_check(reviews, pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time, hint)",
+     ["test_approve_reads_the_payouts_again_after_the_confirmation_and_before_it_sends"]),
 ]
 
 RUNNERS = {

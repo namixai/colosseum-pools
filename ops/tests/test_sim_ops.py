@@ -1538,15 +1538,16 @@ class TheClosing(unittest.TestCase):
         return doc
 
     def approve_main(self, argv, docs, node=None, confirm=None, named=True):
-        """`confirm(folder)`: what happens while the person confirms the send (the wait of `confirm_send` on mainnet).
+        """`confirm(folder)`: what happens while the person confirms the send (the wait of `confirm_send` on mainnet);
+        it may change `self.answers`, what the pool answers from then on.
         `named` False: --reviews is not given, and the documents are in the command's own default folder."""
         import contextlib
         import tempfile
         from unittest import mock
         approver = d.to_checksum_address(self.CLOSER)
         node = node or {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
-        answers = {"payoutCount()": [5], "payout(uint256)": [self.WAITING], "factory()": ["0x" + "99" * 20],
-                   "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
+        answers = self.answers = {"payoutCount()": [5], "payout(uint256)": [self.WAITING], "factory()": ["0x" + "99" * 20],
+                                  "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
         with tempfile.TemporaryDirectory() as state:
             folder = str(pathlib.Path(state) / "reviews")
             pathlib.Path(folder).mkdir()
@@ -1690,6 +1691,34 @@ class TheClosing(unittest.TestCase):
             self.sent.assert_not_called()
         # Confirmed in time, the reviews as they were: sent, once.
         got, sent, _ = self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, node(), confirm=lambda folder: None)
+        self.assertEqual((got, sent.call_count), (0, 1))
+
+    def test_approve_reads_the_payouts_again_after_the_confirmation_and_before_it_sends(self):
+        """The confirmation waits for a person, with no limit, and the pool does not wait with them: the checker stops a
+        payout, the keeper pays it, the creator names another approver, or someone else approves it. Once the send is
+        confirmed the pool is asked again what `approve_check` judges, and the reviews are held to the payouts as it
+        answers them then; whatever would have stopped the offer stops the send."""
+        w = self.WAITING
+        other = d.to_checksum_address(self.OTHER)
+        cases = {
+            "payout 3 is Stopped, not waiting": {"payout(uint256)": [w[:4] + (2, True) + w[6:]]},
+            "payout 3 is Paid, not waiting": {"payout(uint256)": [w[:4] + (3,) + w[5:]]},
+            "payout 3 is approved already": {"payout(uint256)": [w[:7] + (True,)]},
+            "payout 3 does not exist": {"payoutCount()": [3]},
+            f"is not the pool's approver ({other})": {"approver()": [other]},
+            "the pool has no approver": {"approver()": ["0x" + "00" * 20]},
+            # Stopped, lifted and due again at another time: the review on file is of the claim as it stood.
+            "a review of another claim": {"payout(uint256)": [w[:3] + (2_000,) + w[4:]]},
+        }
+        for word, change in cases.items():
+            with self.assertRaises(SystemExit) as caught:
+                self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, confirm=lambda folder: self.answers.update(change))
+            self.assertIn(word, str(caught.exception))
+            self.sent.assert_not_called()
+            if "review" not in word:
+                self.assertIn("read again once the send was confirmed: nothing was sent", str(caught.exception), word)
+        # The pool answers as before the confirmation: sent, once.
+        got, sent, _ = self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, confirm=lambda folder: None)
         self.assertEqual((got, sent.call_count), (0, 1))
 
     def test_lift_only_the_factorys_operator_a_stopped_payout_within_its_14_days(self):
