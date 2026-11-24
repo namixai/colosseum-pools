@@ -360,10 +360,23 @@ def main(argv: list[str] | None = None) -> int:
                     help="on the second machine: read the host's health route once (COLOSSEUM_HOST_HEALTH_URL), raise "
                          "host_not_alive on this machine's channel if it does not answer or its pulse is old, and end")
     ap.add_argument("--state", help="with --watch-host: the file that remembers what was said")
+    ap.add_argument("--say-test", action="store_true",
+                    help="say one test alarm (alarm_test) on the channel, COLOSSEUM_ALERT_CMD, and end: exit 0 once its "
+                         "command took it, 1 when it failed or there is no channel; run by hand when the channel is set up")
     sn.add_args(ap, service=True)
     args = ap.parse_args(argv)
     out = pathlib.Path(args.out)
     flag = pathlib.Path(args.flag) if args.flag else None
+    if args.say_test:
+        # A channel of spaces alone is none (a shell runs it and says nothing failed).
+        took = bool(os.environ.get("COLOSSEUM_ALERT_CMD", "").strip()) and sf.Alarm(None)(
+            "alarm_test", wait=True, why="a test of the alarm channel, said by hand: nothing is wrong")
+        if took is not True:
+            print("the alarm channel did not take the test: COLOSSEUM_ALERT_CMD is not set, or its command failed",
+                  file=sys.stderr)
+            return 1
+        print("the alarm channel took the test alarm")
+        return 0
     if args.unit_failed:
         return unit_failed(args.unit_failed, flag, out / f"failed-{args.unit_failed}.at")
     if args.watch_host is not None:

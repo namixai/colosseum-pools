@@ -458,5 +458,27 @@ class OneJournalNamedTwice(unittest.TestCase):
         self.assertEqual(si.Pulse(None, self.d).review_at(), 1_800_000_000)
 
 
+class TheChannelTriedByHand(unittest.TestCase):
+    def test_say_test_sends_one_alarm_and_its_exit_says_whether_the_channel_took_it(self):
+        import os
+        import pathlib
+        import shutil
+        import tempfile
+        from ops import review_service as rs
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        got = d / "got"
+        with mock.patch.object(rs.sf, "log"), mock.patch("builtins.print"):
+            with mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": f"cat >> '{got}'"}):
+                self.assertEqual(rs.main(["--say-test"]), 0)
+            said = [json.loads(line) for line in got.read_text().splitlines()]
+            self.assertEqual([(s["event"], "nothing is wrong" in s["why"]) for s in said], [("alarm_test", True)])
+            for none in ("exit 3", "", "   "):
+                with mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": none}):
+                    self.assertEqual(rs.main(["--say-test"]), 1, none)
+        self.assertEqual(sorted(p.name for p in d.iterdir()), ["got"], "no flag raised, no folder made: a test only")
+        self.assertIn("-m ops.review_service --say-test", (pathlib.Path(rs.__file__).resolve().parents[1] / "docs" / "HOSTING.md").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

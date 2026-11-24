@@ -17581,6 +17581,11 @@ MUTATIONS = [
      "        except (OSError, ValueError, AttributeError, OverflowError):  # OverflowError: a time like 1e999",
      "        except (OSError, ValueError, AttributeError):",
      ["test_status_json_as_a_symlink_or_too_big_or_not_json_is_null_not_a_crash", "test_the_pulse_gives_no_time_for_one_no_number_can_be"]),
+    # The alarm channel tried by hand: its exit says whether the channel took the test.
+    ("RZ35", "ops/review_service.py",
+     "        if took is not True:\n            print(\"the alarm channel did not take the test",
+     "        if False:\n            print(\"the alarm channel did not take the test",
+     ["test_say_test_sends_one_alarm_and_its_exit_says_whether_the_channel_took_it"]),
 ]
 
 RUNNERS = {
