@@ -17236,8 +17236,8 @@ MUTATIONS = [
      "                self.d[\"links\"].setdefault(t, {\"at\": lo, \"to\": lo - 1})",
      ["test_funding_of_a_new_trader_older_than_a_day_is_still_a_link"]),
     ("RY16", "ops/payout_review.py",
-     "            if until is not None and time.monotonic() > until:\n                self.save()\n                return left",
-     "            if False:\n                self.save()\n                return left",
+     "            if until is not None and time.monotonic() > until:\n                self.save()\n                return waiting",
+     "            if False:\n                self.save()\n                return waiting",
      ["test_the_links_are_read_in_chunks_out_of_time_kept_and_gone_on_with"]),
     ("RY17", "ops/payout_review.py",
      "    held = bool({\"recount\", \"missed-stop\", \"stop-late\", \"stop-unchecked\", \"stop-one-journal\"} & set(out[\"kinds\"])) or bool(unread_accounts) \\\n        or links_unread",
@@ -17409,6 +17409,24 @@ MUTATIONS = [
      "                self._drop(key)\n                self.triggers[key] = self._fresh(px, armed)",
      "                self.triggers[key] = self._fresh(px, armed)",
      ["test_a_stop_a_reread_finds_moved_before_its_kept_prices_were_judged_is_an_alarm_too"]),
+    # Review 16 of #338: once a payout waits, the funding of every buyer of the factory is read, and all wait for it.
+    ("RZ1", "ops/payout_review.py",
+     "        buyers = list(dict.fromkeys([*self.traders(), *waiting]))",
+     "        buyers = waiting",
+     ["test_two_buyers_funded_by_one_wallet_long_before_they_bought_are_linked_when_only_one_has_a_payout",
+      "test_a_payout_waits_until_every_buyers_funding_is_read_not_only_its_own_traders"]),
+    ("RZ2", "ops/payout_review.py",
+     "        if not waiting:\n            return []\n        buyers",
+     "        buyers",
+     ["test_no_payout_waiting_reads_no_funding_at_all"]),
+    ("RZ3", "ops/payout_review.py",
+     "                self.save()\n                return waiting",
+     "                self.save()\n                return [t for t in waiting if not self.links_read(t)]",
+     ["test_a_payout_waits_until_every_buyers_funding_is_read_not_only_its_own_traders"]),
+    ("RZ4", "ops/payout_review.py",
+     "            batch = [t for t in left if int(links[t][\"at\"]) == lo][:chk.ADDRESS_BATCH]",
+     "            batch = [t for t in left if int(links[t][\"at\"]) == lo][:1]",
+     ["test_buyers_go_a_hundred_to_a_call"]),
 ]
 
 RUNNERS = {
@@ -17435,6 +17453,9 @@ RUNNERS = {
     "RY": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.review15.test_review15", "ops.tests.review15.test_loop15",
             "ops.tests.test_payout_review", "ops.tests.test_price_journals", "ops.tests.test_review_service",
             "ops.tests.test_review_alarms", "ops.tests.test_stop_filler", "ops.tests.review14.test_review14"],
+           r"^(?:FAIL|ERROR): (\w+) \("),
+    # The fourth round (review 16 of #338): the reviewer's tests and those of what was decided on them.
+    "RZ": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.review16.test_review16", "ops.tests.review16.test_decisions16"],
            r"^(?:FAIL|ERROR): (\w+) \("),
     # The stops' loop of the simulated pools' keeper: its own test file.
     "SF": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_stop_filler"], r"^(?:FAIL|ERROR): (\w+) \("),

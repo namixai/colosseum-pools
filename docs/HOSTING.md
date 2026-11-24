@@ -941,9 +941,11 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   and the last 1 000 blocks before it again (a log a lagging node left out, a pool the factory's list did not show
   yet; what is read twice is kept once) (a first pass over a long chain goes in parts of 5 000 blocks, each saved; the
   pass's time is looked at every 500 blocks, and a pass out of its time saves what it read and goes on from there).
-  The USDC sent to a trader before they were first seen is read back to the deployment's block only for a trader with
-  a payout waiting, all such traders together, 1 000 blocks a chunk, saved after each chunk and gone on with at the
-  next pass when the time runs out; until it is read to the end that payout is held as not read. Removing
+  The USDC sent to a buyer before they were first seen is read back to the deployment's block once a payout waits,
+  and then for every buyer of the factory (two buyers funded by one wallet are a pair, and the second has no payout
+  of its own): 1 000 blocks a chunk, up to 100 buyers in one call, saved after each chunk and gone on with at the
+  next pass when the time runs out; a buyer first seen later is read back the same way. Until every buyer is read to
+  the end each payout waiting is held as not read; with no payout waiting none of it is read. Removing
   `scan.json` makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;

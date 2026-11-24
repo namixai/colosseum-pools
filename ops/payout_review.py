@@ -2326,7 +2326,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     unread_accounts = list(unread)
     links_unread = trader in (chain.get("linksUnread") or [])
     if links_unread:
-        unread.append("the USDC sent to the trader before their first purchase (read on at each pass)")
+        unread.append("the USDC sent to the trader before their first purchase, or to another buyer of the factory "
+                      "before theirs (read on at each pass)")
     if times_unread:
         unread.append("the factory's delay and ceiling")
     elif disagree:
@@ -3050,10 +3051,12 @@ SCAN_PART = 5_000
 # The blocks read at a time within a part: the pass's time is looked at after each step, and a pass out of its time
 # saves what it read and ends (review 15 of #338), however many accounts a part has to read.
 SCAN_STEP = 500
-# A trader's incoming USDC from the deployment's block to the block they were first seen in (the wallets that funded
-# them, `linked`) is read only for a trader with a payout still waiting, LINK_CHUNK blocks a call of `logs` at a time,
-# all such traders together, the pass's time looked at between chunks and the progress saved: the next pass goes on
-# where it stopped. Until it is read to its end the trader's payout is held as not read (review 15 of #338).
+# A buyer's incoming USDC from the deployment's block to the block they were first seen in (the wallets that funded
+# them, `linked`) is read once a payout waits, and then for every buyer of the factory, not only the one paid: two
+# buyers funded by one wallet are a pair by the funding of both, and the second of them has no payout of its own
+# (review 16 of #338). LINK_CHUNK blocks a call of `logs` at a time, up to ADDRESS_BATCH buyers in one call, the
+# pass's time looked at between chunks and the progress saved: the next pass goes on where it stopped. Until every
+# buyer is read to the end each payout waiting is held as not read. With no payout waiting nothing of it is read.
 LINK_CHUNK = 1_000
 # How many blocks before the last block read each pass reads again (review 15 of #338): a node behind a load balancer
 # whose replica lagged answers an empty eth_getLogs for the newest blocks, and a pool the factory's list did not show
@@ -3086,7 +3089,7 @@ class LogScan:
             except (OSError, ValueError):
                 pass
         # Each trader's incoming USDC before they were first seen: {trader: {"at": the next block to read, "to": the
-        # last}}, read only for a trader with a payout waiting (`read_links`); done when "at" is past "to".
+        # last}}, read for every buyer once a payout waits (`read_links`); done when "at" is past "to".
         self.d.setdefault("links", {})
 
     @property
@@ -3150,7 +3153,7 @@ class LogScan:
             traders = self.traders()
             known = set(self.d["traders"])
             fresh = [t for t in traders if t not in known]
-            for t in fresh:  # their USDC from here on with every block; before it, only if a payout of theirs waits
+            for t in fresh:  # their USDC from here on with every block; before it, once a payout waits (`read_links`)
                 self.d["links"].setdefault(t, {"at": int(self.key["start"]), "to": lo - 1})
             self.d["traders"] += fresh
             self._transfers(usdc, self.d["traders"], lo, hi, seen)
@@ -3170,24 +3173,31 @@ class LogScan:
         return got is not None and int(got["at"]) > int(got["to"])
 
     def read_links(self, traders: list[str], usdc: str, until: float | None = None) -> list[str]:
-        """The incoming USDC of `traders` (those with a payout waiting) from the deployment's block to the block each
-        was first seen in, all of them in one query a chunk of LINK_CHUNK blocks, in step from the lowest block left;
-        the progress saved after each chunk. `until` (a time.monotonic()) is looked at between chunks: out of time,
-        what was read is kept and the next pass goes on. Returns the traders not read to their end."""
+        """The incoming USDC of every buyer of the factory from the deployment's block to the block each was first seen
+        in, once a payout waits (`traders`: those with one; none, nothing is read). Buyers at the same block go in one
+        query, ADDRESS_BATCH of them at most, a chunk of LINK_CHUNK blocks, from the lowest block left; the progress is
+        saved after each chunk, and a buyer first seen after the others were read is read from the deployment the same
+        way. `until` (a time.monotonic()) is looked at between chunks: out of time, what was read is kept and the next
+        pass goes on. Returns `traders` while any buyer is not read to the end (a pair's other wallet may be the one
+        not read: each payout waiting is held), [] once all are."""
+        waiting = list(dict.fromkeys(traders))
+        if not waiting:
+            return []
+        buyers = list(dict.fromkeys([*self.traders(), *waiting]))
         links = self.d["links"]
-        for t in traders:
+        for t in buyers:
             if t not in links:  # seen before links were kept: read from the deployment to their first purchase
                 first = min((int(l["blockNumber"], 16) for l in self.d["pool_logs"]
                              if l["topics"][0] == sk.EXAM_SOLD and _addr(l["topics"][2]) == t), default=self.scanned_to + 1)
                 links[t] = {"at": int(self.key["start"]), "to": first - 1}
         seen = {("transfer", x["tx"], x.get("index")) for x in self.d["transfers"]}
         while True:
-            left = [t for t in dict.fromkeys(traders) if not self.links_read(t)]
+            left = [t for t in buyers if not self.links_read(t)]
             if not left:
                 return []
             if until is not None and time.monotonic() > until:
                 self.save()
-                return left
+                return waiting
             lo = min(int(links[t]["at"]) for t in left)
             batch = [t for t in left if int(links[t]["at"]) == lo][:chk.ADDRESS_BATCH]
             hi = min([lo + LINK_CHUNK - 1] + [int(links[t]["to"]) for t in batch]
@@ -3275,8 +3285,9 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         x["trail"] = payout_trail(life.get((x["pool"], x["id"]), []))
         if x["wasStopped"]:
             x["stopReason"] = {"recorded": recorded.get((x["pool"], x["id"])), "read": stop_reason_read(x["pool"], x["id"])}
-    # The wallets that funded each trader with a payout waiting, from the deployment's block on, read lazily and kept
-    # (`LogScan.read_links`): a trader not read to the end yet is held as not read, never clean (review 15 of #338).
+    # The wallets that funded every buyer of the factory, from the deployment's block on, read once a payout waits and
+    # kept (`LogScan.read_links`): while any buyer is not read to the end, each payout waiting is held as not read,
+    # never clean (review 15 and 16 of #338: the other wallet of a pair has no payout of its own).
     links_unread = kept.read_links(list(dict.fromkeys(x["trader"] for x in payouts if x["state"] == "Due")), usdc, until)
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
