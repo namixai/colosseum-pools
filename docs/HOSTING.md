@@ -1030,7 +1030,10 @@ file of it has changed for 30 minutes (again every 6 hours). Without it every pa
 The review reads of that folder only regular files named `watch-prices-<label>-YYYY-MM-DD.jsonl`, of the days of the
 stops' time, each at most 64 MB (a day is about 7.5 MB: a line of about 85 bytes a block, a block a second, three
 assets). A file past the limit, of another name or a link is not read and said in the review's text: the blocks it
-held rest on the keeper's journal alone, `stop-one-journal`, held; the pass goes on.
+held rest on the keeper's journal alone, `stop-one-journal`, held; the pass goes on. Each file is opened once,
+without following a link or waiting on a pipe, and held on that descriptor to what the listing found (a plain file
+within the limit); no more than the limit is read of one that grows meanwhile, and no line past 64 KB is kept in
+memory. A file refused there, or not read to its end, is `second_journal_unread`.
 
 The folder takes what the second machine's key writes, so it gets a file system of its own, 2 GB (about 9 months of
 day files; old day files can be removed, the review reads only the days of stops still waiting), and the keeper's

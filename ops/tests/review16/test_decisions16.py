@@ -188,6 +188,89 @@ class WhatAJournalKeeps(unittest.TestCase):
         self.assertEqual((len(got.notes), got.notes_more, sorted(got.px[3])), (pr.NOTES_KEPT, 50, [4]))
 
 
+class TheFileAsItIsRead(unittest.TestCase):
+    """A file is held to what its listing found on the descriptor it is read from: a plain file within the limit, and
+    no more than the limit of it is read. In the second writer's folder a link is not followed and a pipe not waited on."""
+
+    def setUp(self):
+        import pathlib
+        import shutil
+        import tempfile
+        self.d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    def test_no_more_than_the_limit_is_read_of_a_file_that_grew_after_it_was_opened(self):
+        import stat
+        from types import SimpleNamespace
+        f = self.d / "watch-prices-sim1-1970-01-01.jsonl"
+        f.write_text("".join(row(b, 7) + "\n" for b in range(1, 2_001)))
+        said = []
+        small = SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=10)  # as it was when it was opened
+        with mock.patch.object(pr, "JOURNAL_FILE_MAX", 1_000), mock.patch.object(pr.os, "fstat", return_value=small):
+            got = list(pr.file_lines([f], strict=True, said=said))
+        self.assertLessEqual(sum(len(x) for x in got), 1_001)
+        self.assertLess(len(got), 40)
+        self.assertEqual(len(said), 1)
+        self.assertIn("grew past the 1000 bytes", said[0])
+        with mock.patch.object(pr, "JOURNAL_FILE_MAX", 1_000):  # and one past the limit when it is opened: none of it
+            said = []
+            self.assertEqual(list(pr.file_lines([f], strict=True, said=said)), [])
+            self.assertIn("past the 1000 a journal file may be", said[0])
+
+    def test_a_line_past_the_limit_is_never_in_memory_and_is_a_bad_line(self):
+        f = self.d / "prices-sim1-1970-01-01.jsonl"
+        f.write_text(row(4, 7) + "\n" + "x" * (3 * pr.LINE_MAX + 5) + "\n" + row(6, 7) + "\n" + "y" * (pr.LINE_MAX + 7))
+        got = list(pr.file_lines([f]))
+        self.assertEqual([x for x in got if x != pr.LONG_LINE], [row(4, 7) + "\n", row(6, 7) + "\n"])
+        self.assertEqual((got.count(pr.LONG_LINE), max(len(x) for x in got)), (2, pr.LINE_MAX + 1))
+        j = pr.Journal()
+        j.add_lines(got)
+        self.assertEqual((sorted(j.px[3]), j.bad), ([4, 6], 2))
+
+    def test_in_the_second_folder_a_link_a_pipe_and_a_folder_are_not_read_and_are_said(self):
+        import os
+        from ops.tests.test_price_journals import HEAD
+        text = json.dumps(HEAD) + "\n" + "".join(row(b, 7) + "\n" for b in (4, 5, 6))
+        (self.d / "elsewhere.jsonl").write_text(text)
+        link, pipe, folder, plain = (self.d / f"watch-prices-sim1-1970-01-0{k}.jsonl" for k in (1, 2, 3, 4))
+        link.symlink_to(self.d / "elsewhere.jsonl")
+        os.mkfifo(pipe)
+        folder.mkdir()
+        plain.write_text(text)
+        said = []
+        got = list(pr.file_lines([link, pipe, folder, plain], strict=True, said=said))
+        self.assertEqual(got, text.splitlines(keepends=True), "the plain file alone")
+        self.assertEqual(len(said), 3)
+        self.assertIn("could not be opened", said[0])
+        self.assertIn("is not a plain file", said[1])
+        self.assertIn("is not a plain file", said[2])
+        # Read by hand (not the second folder), a link is followed as before, and a file not there raises as before.
+        self.assertEqual(list(pr.file_lines([link])), text.splitlines(keepends=True))
+        with self.assertRaises(OSError):
+            list(pr.file_lines([self.d / "none.jsonl"]))
+
+    def test_a_second_journal_file_not_read_to_its_end_is_said_and_its_blocks_rest_on_one_journal(self):
+        from ops.tests.test_price_journals import HEAD
+        (self.d / "second").mkdir()
+        text = json.dumps(HEAD) + "\n" + "".join(row(b, 7) + "\n" for b in (4, 5, 6))
+        (self.d / "prices-sim1-1970-01-01.jsonl").write_text(text)
+        second = self.d / "second" / "watch-prices-sim1-1970-01-01.jsonl"
+        second.write_text(text)
+        real = pr.journal_files
+
+        def swapped(path, *a, **kw):  # between the listing and the reading the file becomes a link to another
+            files = real(path, *a, **kw)
+            if path.parent.name == "second":
+                second.unlink()
+                second.symlink_to(self.d / "prices-sim1-1970-01-01.jsonl")
+            return files
+        with mock.patch.object(pr, "journal_files", swapped):
+            got = pr.read_journals([self.d / "prices-sim1.jsonl", self.d / "second" / "watch-prices-sim1.jsonl"], HEAD)
+        self.assertEqual(got.single_in(3, 4, 6), [4, 5, 6], "the link was not followed: no second journal of these blocks")
+        self.assertEqual(got.unread, ["watch-prices-sim1.jsonl: 1 of its files not read to the end"])
+        self.assertIn("could not be opened", got.notes[0])
+
+
 class SecondJournalNotRead(unittest.TestCase):
     """Whatever goes wrong reading the second journal is that journal not read: its blocks rest on one journal (held),
     the service says it, and the pass goes on to write its documents."""
@@ -210,10 +293,10 @@ class SecondJournalNotRead(unittest.TestCase):
         keeper, second, head = self.folder()
         real = pr.file_lines
 
-        def lines(files):
+        def lines(files, **kw):
             if files and files[0].parent.name == "second":
                 raise RuntimeError("anything at all")
-            return real(files)
+            return real(files, **kw)
         with mock.patch.object(pr, "file_lines", lines):
             got = pr.read_journals([keeper, second], head)
             unread = []

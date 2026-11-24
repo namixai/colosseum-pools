@@ -58,6 +58,7 @@ import math
 import os
 import pathlib
 import re
+import stat
 import sys
 import time
 from array import array
@@ -1227,11 +1228,54 @@ def journal_files(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None 
     return kept
 
 
-def file_lines(files: list[pathlib.Path]):
-    """The lines of `files`, one after the other, read one at a time: a journal is never in memory whole."""
+LONG_LINE = "#" * (LINE_MAX + 1)  # what `file_lines` gives for a line past LINE_MAX: a bad line, never parsed
+
+
+def file_lines(files: list[pathlib.Path], strict: bool = False, said: list | None = None):
+    """The lines of `files`, one after the other, read one at a time: a journal is never in memory whole, and neither
+    is a line past LINE_MAX (LONG_LINE stands for it). Each file is opened once and held, on the descriptor it is read
+    from, to what its listing found (`journal_files`; review 16 of #338: between the listing and the reading it can be
+    swapped or grow): a plain file no larger than JOURNAL_FILE_MAX, of which no more than that is read whatever it
+    grows to meanwhile. `strict` (the second writer's folder, which another machine fills): opened without following
+    a link and without waiting on a pipe, and one that cannot be opened is said, not raised. A file refused, or not
+    read to its end, is said in `said`: the blocks it did not give rest on the other journal alone."""
+    notes = said if said is not None else []
+    flags = os.O_RDONLY | ((os.O_NOFOLLOW | os.O_NONBLOCK) if strict else 0)
     for f in files:
-        with open(f, encoding="utf-8", errors="replace") as fh:
-            yield from fh
+        try:
+            fd = os.open(f, flags)
+        except OSError as exc:
+            if not strict:
+                raise
+            notes.append(f"{f.name} could not be opened ({type(exc).__name__}): not read")
+            continue
+        st = os.fstat(fd)
+        refused = ("is not a plain file" if not stat.S_ISREG(st.st_mode) else
+                   f"is {st.st_size} bytes, past the {JOURNAL_FILE_MAX} a journal file may be" if st.st_size > JOURNAL_FILE_MAX
+                   else None)
+        if refused:
+            os.close(fd)
+            notes.append(f"{f.name} {refused}: not read")
+            continue
+        with os.fdopen(fd, "rb") as fh:
+            left = JOURNAL_FILE_MAX + 1
+            while left > 0:
+                raw = fh.readline(min(LINE_MAX + 2, left))
+                if not raw:
+                    break
+                left -= len(raw)
+                if len(raw) > LINE_MAX and not raw.endswith(b"\n"):
+                    while left > 0:  # the rest of a line past the limit: read on and dropped, never kept
+                        more = fh.readline(min(LINE_MAX + 2, left))
+                        left -= len(more)
+                        if not more or more.endswith(b"\n"):
+                            break
+                    yield LONG_LINE
+                    continue
+                yield raw.decode("utf-8", errors="replace")
+            if left <= 0:
+                notes.append(f"{f.name} grew past the {JOURNAL_FILE_MAX} bytes a journal file may be while it was read: "
+                             "not read to its end")
 
 
 def journal_text(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> str:
@@ -1261,7 +1305,12 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
             for text in said[:NOTES_KEPT]:
                 j.note(text)
             j.notes_more += max(0, len(said) - NOTES_KEPT)
-            j.add_lines(file_lines(files), expect, path.name)
+            problems: list[str] = []
+            j.add_lines(file_lines(files, strict=k > 0, said=problems), expect, path.name)
+            for text in problems:
+                j.note(text, first=True)
+            if problems and k > 0:
+                j.unread.append(f"{path.name}: {len(problems)} of its files not read to the end")
         except Exception as exc:
             if k == 0:
                 raise

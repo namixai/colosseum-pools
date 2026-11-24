@@ -192,7 +192,6 @@ class Files16(unittest.TestCase):
             self.assertEqual(pr.journal_files(d / "watch-prices-sim1.jsonl", strict=True, notes=notes), [])
         self.assertTrue(notes)
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_what_is_read_of_a_file_is_capped_at_the_limit_whatever_it_grew_to_after_the_size_was_looked_at(self):
         """The size is looked at when the file is listed; `file_lines` then reads to its end. A file the key's holder keeps
         growing (or swaps for another) between the two is read as long as it is."""
@@ -203,14 +202,14 @@ class Files16(unittest.TestCase):
             n = sum(1 for _ in pr.file_lines([f]))
         self.assertLess(n, 1_000, f"{n} lines read of a file past the {1_000} byte limit")
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_one_long_line_is_not_read_whole_either(self):
         d = tmp(self)
         f = d / "watch-prices-sim1-2026-11-24.jsonl"
         f.write_text("x" * 5_000_000)
         with mock.patch.object(pr, "JOURNAL_FILE_MAX", 100_000):
             got = [len(x) for x in pr.file_lines([f])]
-        self.assertTrue(not got or max(got) <= 100_000, f"a line of {max(got)} bytes in memory")
+        # The message as first written asked for max() of an empty list (the file refused whole): it asks with a default.
+        self.assertTrue(not got or max(got) <= 100_000, f"a line of {max(got, default=0)} bytes in memory")
 
     @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_the_same_journal_given_twice_is_not_two_journals(self):
