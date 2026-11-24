@@ -20,11 +20,9 @@ import datetime as _dt
 import functools
 import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import urlsplit
 
 import eth_abi
 import requests
@@ -126,26 +124,16 @@ def record(step: str, **fields: Any) -> dict:
 
 # ── a node's address stays out of what is said ───────────────────────────────────────
 
-_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
-_URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
-_HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
-
-
 def hush(text) -> str:
-    """`text` with no node's address in it: the host's own node wherever it stands, then every URL as <node>, a bare
-    request path (urllib3's "url: /…") as <path>, a host='…' as <host>, and the own node's host name wherever else it
-    stands (a resolver names it bare). A provider's key rides in the path, the query or the host name."""
-    text = str(text)
-    if OWN_NODE:
-        text = text.replace(OWN_NODE, "<node>")
-    text = _HOST.sub(r"\1<host>\2", _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text)))
+    """`text` with no node's address in it, by the rules the checker already has for its own lines (ops/sim_check.py,
+    `quiet`): the configured nodes' addresses with whatever goes on after them, every other URL, a bare request path,
+    a host='…', and the configured nodes' host names wherever else they stand. This module's node is among the
+    configured ones, so the host's own node is. Not cut: whoever logs it cuts it, after the address is gone."""
+    from ops import sim_check  # it imports this module, so here and not at the top
     try:
-        host = urlsplit(OWN_NODE).hostname if OWN_NODE else None
-    except ValueError:
-        host = None
-    if host and host not in ("127.0.0.1", "localhost"):
-        text = re.sub(re.escape(host), "<host>", text, flags=re.I)
-    return text
+        return sim_check.quiet(text, None)
+    except ValueError:  # a configured address that does not parse: nothing of the text is said rather than all of it
+        return "an error whose words are withheld: a node's address in them could not be taken out"
 
 
 def node_shown(url: str | None = None) -> str:

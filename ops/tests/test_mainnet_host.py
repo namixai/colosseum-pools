@@ -590,9 +590,11 @@ class TheHostsOwnNode(unittest.TestCase):
                 c.rpc("eth_call", [])
 
     def test_hush_takes_out_every_address_and_the_own_nodes_name(self):
+        from ops import sim_check
         from spike.hlspike import common as c
-        with mock.patch.object(c, "OWN_NODE", OWN):
+        with mock.patch.object(c, "OWN_NODE", OWN), mock.patch.object(c, "RPC_URL", OWN):
             self.assertEqual(c.hush(f"for url: {OWN} and {OWN[:40]}"), "for url: <node> and <node>")
+            self.assertEqual(c.hush(f"for url: {OWN}/and/on " + "x" * 300), "for url: <node> " + "x" * 300, "not cut here")
             self.assertEqual(c.hush("Max retries exceeded with url: /evm/KEY-IN-THE-PATH (Caused by x)"),
                              "Max retries exceeded with url: <path> (Caused by x)")
             self.assertEqual(c.hush("host='KEY-IN-THE-HOST.node.example', port=443"), "host='<host>', port=443")
@@ -600,6 +602,14 @@ class TheHostsOwnNode(unittest.TestCase):
             self.assertEqual(c.hush("execution reverted: NotFiller()"), "execution reverted: NotFiller()")
         with mock.patch.object(c, "OWN_NODE", ""):
             self.assertEqual(c.hush("see https://other.example/x?k=1 now"), "see <node> now")
+        # One set of rules: the checker's own, which already hid its lines' addresses (ops/sim_check.py, `quiet`).
+        with mock.patch.object(sim_check, "quiet", return_value="the checker's rules") as rules:
+            self.assertEqual(c.hush("anything"), "the checker's rules")
+        rules.assert_called_once_with("anything", None)
+        self.assertNotIn("re.compile", (ROOT / "spike" / "hlspike" / "common.py").read_text(), "no rules of its own")
+        # A configured address that does not parse: nothing of the text is said, rather than all of it.
+        with mock.patch.object(c, "RPC_URL", "https://[not-an-address/evm"):
+            self.assertNotIn("KEY", c.hush("failed at https://x.example/KEY and [not-an-address"))
 
     def test_a_person_is_shown_which_node_and_never_the_hosts_own_address(self):
         import contextlib
@@ -640,7 +650,7 @@ class TheHostsOwnNode(unittest.TestCase):
         self.assertIs(sim_keeper.log, core.log)
         started = dict(node=stop_filler.host_of(OWN), tip_wei=0, sends=True, block=7)
         out = io.StringIO()
-        with mock.patch.object(c, "OWN_NODE", OWN), contextlib.redirect_stdout(out):
+        with mock.patch.object(c, "OWN_NODE", OWN), mock.patch.object(c, "RPC_URL", OWN), contextlib.redirect_stdout(out):
             core.log("stop_loop_started", **started)
             core.log("loop_failed", error=f"HTTPSConnectionPool(host='KEY-IN-THE-HOST.node.example'): url: /evm/KEY-IN-THE-PATH")
         lines = [json.loads(l) for l in out.getvalue().splitlines()]
