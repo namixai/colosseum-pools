@@ -15059,9 +15059,12 @@ MUTATIONS = [
      '  if (now === null || now === undefined || now === "" || !Number.isFinite(Number(now))) {',
      '  if (now === null) {',
      ["a trading key's approval: none, valid to the second before it ends, ended from that second"]),
+    # Re-aimed 24 Nov 2026. Reading the staged entries instead made the script stop on the staged simulation-pool
+    # record (it names no key registry), and the run takes a command that failed inside a test for a mutant that did
+    # not compile. Same claim, a mutant the test can judge: the testers entries are the ones the site only reads.
     ("NC9", "scripts/app_config.py",
      '    for entry in (e for e in entries if e["network"] == network.name and e["role"] == "testers"):',
-     '    for entry in (e for e in entries if e["network"] == network.name and e["role"] == "staged"):',
+     '    for entry in (e for e in entries if e["network"] == network.name and e["role"] == "nobody"):',
      ["app/config.js is what scripts/app_config.py writes for testnet"]),
     ("PI11", "docs/SAFETY.md",
      "| S76 | `src/Pool.sol:201` |",
@@ -17878,6 +17881,10 @@ MUTATIONS = [
      "    if (strict && readFailed(err)) throw err;\n",
      "",
      ['"Not found" is the contract\'s answer, never a read that failed on its way']),
+    ("NC20", "scripts/app_config.py",
+     '    read_only = [] if sim is not None else read_only_entries(network, entries, files)',
+     '    read_only = read_only_entries(network, entries, files)',
+     ["a site of simulation pools shows one factory, on the network's own USDC; a live deployment keeps the settings it had"]),
 ]
 
 RUNNERS = {

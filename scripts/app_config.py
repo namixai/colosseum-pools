@@ -351,7 +351,8 @@ def config(network, entries: list[dict], files: Files, gateway: str | None = Non
         lines += [f"      {key}: {js(value)}," for key, value in row.items()]
         lines.append("    },")
     lines.append("  ],")
-    read_only = read_only_entries(network, entries, files)
+    # A site of simulation pools names no other deployment: it has no page for a PoolFactory's pools, read or sold.
+    read_only = [] if sim is not None else read_only_entries(network, entries, files)
     if read_only:
         lines.append(READ_ONLY_NOTE.rstrip("\n"))
         lines.append("  readOnlyDeployments: [")

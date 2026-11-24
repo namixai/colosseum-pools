@@ -268,6 +268,22 @@ test("a site of simulation pools shows one factory, on the network's own USDC; a
       rmSync(dir, { recursive: true, force: true });
     }
   }
+  // A testers deployment beside the staged factory, with no live one: the site is still the one factory's, and the
+  // settings name no deployment the site would only read.
+  const TESTERS = { ...MAIN, role: "testers" };
+  const beside = example([SIM, TESTERS], { ...records, ...simRecords });
+  try {
+    const out = join(beside, "config.mjs");
+    const answer = run("--network", "mainnet", "--root", beside, "--out", out);
+    assert.equal(answer.status, 0, answer.stderr);
+    const { CONFIG } = await import(pathToFileURL(out).href);
+    assert.deepEqual(CONFIG.sim, { label: "sim-main", factory: SIM_FACTORY });
+    assert.deepEqual(CONFIG.deployments, []);
+    assert.equal("readOnlyDeployments" in CONFIG, false);
+    assert.ok(!readFileSync(out, "utf8").includes(FACTORY), "the testers deployment's factory is in the settings of a site of simulation pools");
+  } finally {
+    rmSync(beside, { recursive: true, force: true });
+  }
   // With a live deployment the settings are that deployment's, as before: the staged simulation pools are not in them.
   const dir = example([MAIN, SIM], { ...records, ...simRecords });
   try {
