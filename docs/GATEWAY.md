@@ -734,7 +734,9 @@ their events, a few hundred bytes a code or a stop: well under a megabyte for a 
 
 The health route carries the host's pulse, numbers only (`Pulse`): `now` (the host's clock), `prices_at` (the time
 the stops' loop last wrote its journal of prices: the newest modification time of today's and yesterday's day file,
-`prices-<label>-YYYY-MM-DD.jsonl` in `SIM_INDEX_KEEPER_DIR`, found by name and never read) and `review_at` (`at` of
+`prices-<label>-YYYY-MM-DD.jsonl` in `SIM_INDEX_KEEPER_DIR`, by the deployment's label as the keeper names it (the
+record's file name without its network; `SIM_INDEX_PRICES` names another journal outright), found by name and never
+read) and `review_at` (`at` of
 the payout review's `status.json`, the end of its last pass), null where there is none. A watch on the second machine
 reads it every minute (`colosseum-host-watch@`, docs/HOSTING.md) and raises its own alarm when the host does not
 answer or either time is old: the host's own channel cannot say that the host is down.
@@ -791,20 +793,24 @@ cannot name ("could not coalesce error") is said as the node not answering, with
 can still do wrong is leave a row out: the page cannot tell a code the index never named from one that does
 not exist, short of reading the whole history itself.
 
-**On the host.** The process listens on `127.0.0.1:8789` and nginx passes `/v1/simindex/` to it:
+**On the host.** The process listens on `127.0.0.1:8789` and nginx passes its three paths to it, GET alone, and
+sends every answer on as `no-store`. The route is in `ops/host/nginx-pools-api.conf.in`, so every release
+writes it; on a host where no index runs those three paths answer 502 and the rest of the site is as before:
 
     # nginx, beside /v1/contacts in ops/host/nginx-pools-api.conf.in
     limit_req_zone $binary_remote_addr zone=pools_simindex_ip:1m rate=60r/m;
-    location ^~ /v1/simindex/ {
+    location ~ ^/v1/simindex/(health|pool|reviews)$ {
         limit_except GET { deny all; }
         limit_req zone=pools_simindex_ip burst=20 nodelay;
         proxy_pass http://127.0.0.1:8789;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control no-store always;
     }
 
-    # /etc/colosseum/sim-index-<name>.env
-    COLOSSEUM_NETWORK=            # empty for testnet, mainnet for mainnet
+    # /etc/colosseum/sim-index-<name>.env (on a mainnet host bootstrap.sh --sim-instance writes it, docs/HOSTING.md)
+    COLOSSEUM_NETWORK=            # empty for testnet, mainnet for mainnet: the host's own network
     SIM_INDEX_RECORD=deployments/testnet-rehearsal998.json   # SimPoolFactory and block; or
     # SIM_INDEX_FACTORY=0x…  SIM_INDEX_FROM_BLOCK=…
     SIM_INDEX_ALLOW_ORIGIN=https://pools.usenami.io

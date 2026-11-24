@@ -675,16 +675,29 @@ def settings(env, root: pathlib.Path) -> dict:
             "bind": env.get("SIM_INDEX_BIND", DEFAULT_BIND), "allow_origin": env.get("SIM_INDEX_ALLOW_ORIGIN", ""),
             # The review service's folder (ops/host/colosseum-payout-review@.service --out); unset: no reviews route.
             "reviews": pathlib.Path(env["SIM_INDEX_REVIEWS"]) if env.get("SIM_INDEX_REVIEWS") else None,
-            # The stops' journal of the deployment (prices-<label>.jsonl in SIM_INDEX_KEEPER_DIR, the label the record's
-            # name), whose day files' times the health route says; SIM_INDEX_PRICES names it outright.
+            # The stops' journal of the deployment (prices-<label>.jsonl in SIM_INDEX_KEEPER_DIR, by the deployment's
+            # label, as its writer names it), whose day files' times the health route says; SIM_INDEX_PRICES names it
+            # outright.
             "prices": prices_path(env, record)}
 
 
+def label_of(record: str) -> str:
+    """The deployment's label, from its record's file name: deployments/<network>-<label>.json (ops/deployments.py,
+    `record_path`), the label the keeper is started with (--deployment) and names its files by. A name without the
+    network before it is the label as it stands."""
+    stem = pathlib.Path(record).stem
+    return stem.removeprefix(f"{NETWORK.name}-")
+
+
 def prices_path(env, record: str) -> pathlib.Path | None:
+    """The journal whose day files' times the pulse says: SIM_INDEX_PRICES when it names one; else the keeper's own
+    default for the record's deployment, prices-<label>.jsonl in SIM_INDEX_KEEPER_DIR (ops/stop_filler.py `build`
+    names it by the label; a test holds the two together). By the record's file name it was prices-mainnet-sim1.jsonl,
+    which nobody writes: the pulse had no time and the watch said the host was down."""
     if env.get("SIM_INDEX_PRICES"):
         return pathlib.Path(env["SIM_INDEX_PRICES"])
     if env.get("SIM_INDEX_KEEPER_DIR") and record:
-        return pathlib.Path(env["SIM_INDEX_KEEPER_DIR"]) / f"prices-{pathlib.Path(record).stem}.jsonl"
+        return pathlib.Path(env["SIM_INDEX_KEEPER_DIR"]) / f"prices-{label_of(record)}.jsonl"
     return None
 
 

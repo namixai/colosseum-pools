@@ -363,5 +363,112 @@ class Bootstrap(unittest.TestCase):
         subprocess.run(["bash", "-n", str(HOST / "bootstrap.sh")], check=True)
 
 
+class TheIndexOnNginx(unittest.TestCase):
+    """The index of a simulated pool is reached through nginx: the second machine's watch reads the host's pulse there,
+    and the operator's page the reviews. install.sh writes the site anew from the template at every release, so the
+    route is the template's own."""
+
+    def site(self) -> str:
+        from ops.tests.test_host_instances import Nginx
+        return Nginx.render(self, hi.nginx_locations([]), hi.nginx_upstreams([]))
+
+    def block(self, site: str) -> str:
+        at = site.index("    location ~ ^/v1/simindex/")
+        return site[at:site.index("\n    }\n", at)]
+
+    def test_the_three_paths_the_index_answers_go_to_it_and_no_other(self):
+        from gateway import simindex
+        site = self.site()
+        server = site[site.index("server_name pools-api.usenami.io;"):]
+        block = self.block(server)
+        self.assertLess(server.index(block), server.index("    location / {\n        return 404;"),
+                        "inside the API's server, before its 404")
+        answered = re.findall(r'url\.path == "/v1/simindex/(\w+)"', (ROOT / "gateway" / "simindex.py").read_text())
+        self.assertEqual(sorted(answered), ["health", "pool", "reviews"])
+        named = re.match(r"    location ~ \^/v1/simindex/\(([a-z|]+)\)\$ \{\n", block)
+        self.assertIsNotNone(named, block)
+        self.assertEqual(sorted(named.group(1).split("|")), sorted(answered), "the paths the service answers, each whole")
+        self.assertIn(f"        proxy_pass http://{simindex.DEFAULT_BIND};\n", block, "the index's own port")
+        self.assertNotIn("pools_gateway", block, "never a gateway's upstream")
+        # The watch on the second machine asks for exactly this path (its unit's COLOSSEUM_HOST_HEALTH_URL).
+        self.assertIn("/v1/simindex/health", (HOST / "second-writer" / "colosseum-host-watch@.service").read_text())
+
+    def test_get_alone_under_a_limit_and_nothing_keeps_an_answer(self):
+        site = self.site()
+        block = self.block(site)
+        self.assertIn("        limit_except GET { deny all; }\n", block)
+        self.assertIn("        limit_req zone=pools_simindex_ip burst=20 nodelay;\n", block)
+        self.assertIn("limit_req_zone $binary_remote_addr zone=pools_simindex_ip:1m rate=60r/m;", site[:site.index("server {")])
+        self.assertIn("        proxy_hide_header Cache-Control;\n        add_header Cache-Control no-store always;", block)
+        directives = "\n".join(l for l in site.splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotIn("proxy_cache", directives)
+        self.assertNotIn("X-Real-IP", block, "the index limits by nothing a client says")
+
+    def test_the_route_is_the_templates_so_a_release_keeps_it_and_a_host_without_an_index_keeps_its_site(self):
+        template = (HOST / "nginx-pools-api.conf.in").read_text()
+        self.assertEqual(template.count("location ~ ^/v1/simindex/(health|pool|reviews)$ {"), 1)
+        # No marker of its own and no word of it in install.sh: nothing to fill in, nothing to leave out by hand.
+        self.assertNotIn("simindex", (HOST / "install.sh").read_text().split("# 2. Units")[1].split("# 3.")[0].replace(
+            "colosseum-sim-index@.service", ""))
+        # With no instance at all the first gateway's paths are as they were: four exact locations and one upstream.
+        site = self.site()
+        self.assertEqual(site.count("location ="), 4)
+        self.assertEqual(len(re.findall(r"^upstream \S+ \{", site, re.M)), 1)
+        self.assertNotIn("@", "".join(l for l in site.splitlines() if l.startswith("@")))
+
+
+class TheJournalThePulseLooksAt(unittest.TestCase):
+    """The host's pulse says when the stops' loop last wrote its journal of prices. The loop names the journal by the
+    deployment's label; the index, given the record's file, looked for prices-mainnet-sim1-<day>.jsonl, which nobody
+    writes. One name on both sides, held here: the writer's own default against the index's."""
+
+    def written(self, label: str, folder: pathlib.Path) -> tuple[pathlib.Path, str]:
+        """The journal the keeper's stops' loop writes for `label` with its unit's --state, by its own default."""
+        from ops import stop_filler as sf
+        unit = (HOST / "colosseum-multi-keeper@.service").read_text()
+        state = pathlib.PurePosixPath(re.search(r"--state (\S+)", unit).group(1).replace("${COLOSSEUM_DEPLOYMENT}", label))
+        self.assertNotIn("--price-journal", unit)
+        self.assertEqual(str(state.parent), "/var/lib/colosseum-keeper")
+        args = mock.Mock(stop_rpc="", price_journal=None, stop_alarm=None, deployment=label, stop_tip_gwei=0,
+                         stop_overdue=5, stop_alarm_min_blocks=2)
+        with mock.patch.object(sf, "Node"), mock.patch.object(sf, "check_chain"):
+            loop = sf.build(args, mock.Mock(factory=None), folder / state.name)
+        try:
+            return loop.journal.path, loop.journal.file_of(1_800_000_000).name
+        finally:
+            loop.journal.close()
+
+    def test_the_index_looks_for_the_journal_its_writer_writes(self):
+        from gateway import simindex
+        from spike.hlspike import network as networks
+        unit = (HOST / "colosseum-sim-index@.service").read_text()
+        self.assertIn("Environment=SIM_INDEX_KEEPER_DIR=/var/lib/colosseum-keeper", unit)
+        for net in (networks.MAINNET, networks.TESTNET):
+            for label in ("sim1", "rehearsal998", "mainnet-first"):
+                with self.subTest(net=net.name, label=label), tempfile.TemporaryDirectory() as d, \
+                        mock.patch.object(simindex, "NETWORK", net):
+                    folder = pathlib.Path(d)
+                    journal, day_file = self.written(label, folder)
+                    record = str(deployments.record_path(label, net).relative_to(deployments.ROOT))
+                    self.assertEqual(record, f"deployments/{net.name}-{label}.json")
+                    looked = simindex.prices_path({"SIM_INDEX_KEEPER_DIR": str(folder)}, record)
+                    self.assertEqual(looked, journal)
+                    # And the day file the pulse takes the time of is the one the writer makes for that day.
+                    (folder / day_file).write_text("{}\n")
+                    os.utime(folder / day_file, (1_800_000_000 - 7, 1_800_000_000 - 7))
+                    pulse = simindex.Pulse(looked, None, clock=lambda: 1_800_000_000)
+                    self.assertEqual(pulse.prices_at(), 1_800_000_000 - 7)
+
+    def test_the_setting_that_names_the_journal_outright_still_wins(self):
+        from gateway import simindex
+        env = {"SIM_INDEX_PRICES": "/elsewhere/prices-x.jsonl", "SIM_INDEX_KEEPER_DIR": "/k"}
+        self.assertEqual(simindex.prices_path(env, "deployments/mainnet-sim1.json"), pathlib.Path("/elsewhere/prices-x.jsonl"))
+        self.assertIsNone(simindex.prices_path({}, "deployments/mainnet-sim1.json"))
+        self.assertIsNone(simindex.prices_path({"SIM_INDEX_KEEPER_DIR": "/k"}, ""))
+        # A record named without its network is the label as it stands, as before.
+        self.assertEqual(simindex.prices_path({"SIM_INDEX_KEEPER_DIR": "/k"}, "deployments/sim1.json"),
+                         pathlib.Path("/k/prices-sim1.jsonl"))
+
+
 if __name__ == "__main__":
     unittest.main()
