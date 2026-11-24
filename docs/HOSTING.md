@@ -969,7 +969,8 @@ time are kept, about 6 MB a day of two journals of three assets) starts `colosse
 (tried by hand when it is set up or changed, with that variable in the environment:
 `/opt/colosseum-pools/venv/bin/python -m ops.review_service --say-test` says one test alarm, `alarm_test`, and exits 0
 only once the channel's command took it);
-an alarm is taken only when the channel took it (a line only in `ALARM` is said again), and on mainnet the units do
+an alarm is taken only when the channel took it (a line only in `ALARM` is said again; a command of spaces alone is
+no channel, at the start and at each alarm), and on mainnet the units do
 not start without the channel. A pass writes every document and `status.json` first, then says its alarms, 60 seconds for all of
 them: a channel that hangs keeps no document from the disk, and an alarm left over is said at the next pass.
 

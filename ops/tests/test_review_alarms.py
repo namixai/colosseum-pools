@@ -33,6 +33,27 @@ class Channel(unittest.TestCase):
             self.assertIn('"x"', (self.dir / "f").read_text())
             self.assertFalse(sf.Alarm(None, "")("x", wait=True), "no channel and no flag: nobody has it")
 
+    def test_a_channel_of_spaces_alone_is_no_channel(self):
+        """`sh -c "   "` runs and says nothing failed: taken for a channel, every alarm is 'delivered' to nobody and
+        remembered as said. A command of spaces alone, given or in COLOSSEUM_ALERT_CMD, is no channel wherever the
+        alarm asks after one: not taken with `wait`, no thread without it, nothing run, and said once as no channel."""
+        for blank in (" ", "   ", "\t\n", " \n  "):
+            for given in (True, False):
+                with mock.patch.object(sf, "log") as log, mock.patch.object(sf.subprocess, "run") as ran, \
+                        mock.patch.object(sf.threading, "Thread") as thread, \
+                        mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": blank}):
+                    alarm = sf.Alarm(self.dir / "f", blank) if given else sf.Alarm(self.dir / "f")
+                    self.assertIs(alarm("x", wait=True), False, (blank, given))
+                    self.assertIsNone(alarm("x"), (blank, given))
+                ran.assert_not_called()
+                thread.assert_not_called()
+                said = [call.args[0] for call in log.call_args_list]
+                self.assertEqual((said.count("stop_alarm_no_channel"), said.count("stop_alarm_sent")), (1, 0), (blank, given))
+        self.assertEqual((self.dir / "f").read_text().count('"x"'), 16, "each is still written to the flag file")
+        # A command with spaces around it is the channel it names.
+        with mock.patch.object(sf, "log"):
+            self.assertTrue(sf.Alarm(self.dir / "f", "  cat >/dev/null \n")("x", wait=True))
+
     def test_on_mainnet_the_review_and_the_stops_loop_do_not_start_without_a_channel(self):
         """Review 15 of #338 (M4): on mainnet, no COLOSSEUM_ALERT_CMD is a refusal at the start, loud; testnet as before."""
         from ops.tests.test_sim_network import on

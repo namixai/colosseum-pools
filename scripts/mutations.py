@@ -17643,6 +17643,11 @@ MUTATIONS = [
      "log_line(event=\"read_failed\", error=f\"{type(exc).__name__}: {quiet(exc)}\", wait_s=delay,",
      "log_line(event=\"read_failed\", error=f\"{type(exc).__name__}: {str(exc)[:200]}\", wait_s=delay,",
      ["test_the_log_of_a_read_that_failed_carries_no_address_of_the_node"]),
+    # The alarm's channel: a command of spaces alone is no channel.
+    ("AL8", "ops/stop_filler.py",
+     "        self.command = (os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\") if command is None else command).strip()",
+     "        self.command = os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\") if command is None else command",
+     ["test_a_channel_of_spaces_alone_is_no_channel"]),
 ]
 
 RUNNERS = {
