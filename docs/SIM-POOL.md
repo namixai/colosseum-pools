@@ -883,7 +883,8 @@ The fill window of a plan is fixed at creation, so it is measured first, on a po
 the widest window, 60 blocks, so a late fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
 Its terms say testnet, so mainnet refuses it; mainnet's is `deployments/plans/sim-measure-pool-999.json`, the same
 plan with its network named (`"network": "mainnet"`: `pool` and `check` refuse a plan that names another network than
-theirs, so testnet refuses it) and the opening of its terms without testnet's words. Once measured, the pool's line
+theirs, so testnet refuses it) and the opening of its terms without testnet's words, saying trading exams where
+testnet's says a simulated pool and paper exams (the site shows the terms, and says neither). Once measured, the pool's line
 goes off (`deploy_sim line --off`): the exam bought runs on and nothing more is sold.
 
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
