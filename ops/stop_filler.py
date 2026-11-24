@@ -16,10 +16,21 @@ the stops while it ran; each fill and each stop waiting for its own receipt, the
 limit holding the whole process for up to 63 seconds; and a stop set while the keeper was behind its logs unknown until
 the slow pass. This loop runs in a thread of its own, beside the keeper's:
 
+  every look       → one `eth_call`: Multicall3's `aggregate3` at `latest` says the block's number, its time and the
+                     oracle price of every platform asset and every asset with a stop or a take standing, all of one
+                     state (`_look`). The number and the time are the call's own, not a tag's: a node answers a read
+                     "at block N" as it likes (the public ones answer at their head), and a node that runs a call as
+                     the block to come is measured (twice, taken when the two agree) and counted back (`_numbering`).
+                     A look whose number and time do not go with what the loop has seen, and one look a minute, is
+                     held to the node's own record of its block, and one that does not hold makes no step by its
+                     number (`_checked`). A price read after another that failed in the call (which may have burned
+                     its gas) is asked again alone. Without Multicall3 on the chain, and for a look whose one call
+                     failed whole: the head, then a call a price, as it was;
   every block      → one `eth_getLogs` of the blocks since its last look (the stops and takes set, cleared and filled,
-                     the fills that move a position, the exams sold and ended), one read of the oracle price for each
-                     asset with a stop or a take standing, and the stops whose price has reached them compared here, not
-                     tried one by one with an `eth_call`;
+                     the fills that move a position, the exams sold and ended), and the stops whose price has reached
+                     them compared here, not tried one by one with an `eth_call`. With the keeper, the orders placed
+                     are read in the same call and the step's blocks and logs handed to its fast loop (`share`), which
+                     asks the node for no head and no logs of its own;
   a stop reached   → `fillTrigger` signed and sent at once, with a fixed gas, no reads before it and no wait for its
                      receipt: the receipt is looked at in the next blocks. A stop the exam refused once is tried with an
                      `eth_call` first the next time (the book past the ceiling, say), as before;
@@ -32,7 +43,11 @@ the slow pass. This loop runs in a thread of its own, beside the keeper's:
                      never with other ones under the same nonce;
   its own node     → `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the keeper's node when not set. Every call is tried once:
                      a busy node costs the loop that look, not a minute; the blocks it missed are read back the next
-                     time, their events always (`CATCHUP` blocks at most) and their prices for the last `BACKFILL`;
+                     time, their events always (`CATCHUP` blocks at most) and their prices for the last `BACKFILL`,
+                     each by its number in one call and taken only when the call itself says it ran in that block,
+                     from a node whose answers by number held against the loop's own looks within ten minutes
+                     (`_read_back_holds`): otherwise the block is a gap of the journal, never a line with another
+                     block's price;
   a tip            → `--stop-tip-gwei` (COLOSSEUM_STOP_TIP_GWEI), zero when not set, as every send of the keeper's.
 
 The watch runs on the same prices. For each stop or take standing, armed and with a position open, a stretch of blocks
@@ -48,8 +63,9 @@ until a person removes it. So does a loop that cannot see: a thread that ended o
 `STALL_S` seconds, prices unread for `BLIND_ALARM_BLOCKS` blocks, or a gap past `CATCHUP` are alarms too.
 
 Every block it looks at goes to a journal (`--price-journal`, prices-<deployment>.jsonl beside the state, written as
-one file a day with a header naming the chain, the factory and the deployment), one JSON line a block: its number, its
-time, this loop's clock, and the oracle price of every platform asset and every asset with a stop or a take standing
+one file a day with a header naming the chain, the factory and the deployment), one JSON line a block: its number and
+its time as the call that read its prices said them, this loop's clock, and the oracle price of every platform asset
+and every asset with a stop or a take standing
 (`PriceJournal`), so the first blocks after a restart are in it before the stops are read again; the blocks it did not
 look at are written as gaps with why (not running, the head ahead of its read-back, behind past `CATCHUP`). It
 survives a restart (a last line cut short is cut off) and has one writer. It is the record `ops/payout_review.py
@@ -61,8 +77,14 @@ Nothing is sent on a timer: the only transaction of this loop is a stop's `fillT
 reached. One that has not landed `BUMP_AFTER_S` later is signed again under its nonce with fees a quarter higher (only
 one of them can land), up to `MAX_BUMPS` times. Alarms besides the misses: the node's head older than `STALE_HEAD_S`
 by this machine's clock (`stop_node_stale`), the loop short of the head for `BEHIND_S` (`stop_loop_behind`), the key
-able to pay for fewer than `MIN_RUNWAY_FILLS` stops (`stop_key_low`), and the journal not written
-(`stop_journal_failed`). No key and no node address goes to a line or an alarm (`scrub`).
+able to pay for fewer than `MIN_RUNWAY_FILLS` stops (`stop_key_low`), the journal not written
+(`stop_journal_failed`), more than a tenth of the last ten minutes' blocks with no price in it, a stop standing or not
+(`stop_prices_unread`), a block the node did not answer for by its number while a stop stood armed
+(`stop_read_back_gap`, once an hour at most), a node that answered an old block by its number with other prices than
+the loop's own look read (`stop_read_back_off`: reading back is off for the run), the node's numbering measured again
+and changed (`stop_numbering_changed`), and a look that did not hold with the numbering measured as before
+(`stop_look_wrong`, once an hour at most). No key and no node address goes to a line or an alarm (`scrub`). Once a
+minute the loop says it is alive, with the requests it made of its node since, by method (`stop_loop_alive`).
 
 What this does not do: carry out a stop whose reach is shorter than the way from a block seen to a transaction landed
 (about one or two blocks); carry out a stop the exam refuses (its book too far from the oracle); stop a trader taking a
@@ -76,6 +98,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import collections
 import fcntl
 import json
 import os
@@ -86,6 +109,7 @@ import subprocess
 import sys
 import threading
 import time
+import typing
 from urllib.parse import urlsplit
 
 import requests
@@ -104,6 +128,7 @@ STOPPED = "0x" + keccak(text="Stopped(uint8,uint8,int256)").hex()
 PASSED = "0x" + keccak(text="Passed(address,int256)").hex()
 ACCOUNT_TOPICS = [sk.TRIGGER_SET, sk.TRIGGER_CLEARED, sk.TRIGGER_FILLED, sk.FILLED, STOPPED, PASSED]
 POOL_TOPICS = [sk.EXAM_SOLD, sk.FUNDED]
+FEED_TOPICS = [sk.PLACED, sk.EXAM_SOLD, sk.FUNDED]  # what the keeper's fast loop takes of a step's logs (`share`)
 ORACLE_PX = c.PRECOMPILE["oraclePx"]
 HIP3_BASE = 100_000  # CoreOps.HIP3_BASE: the oracle's index of an asset is pxIndex(asset)
 ACTIVE = 1  # PaperExam.Status.Active
@@ -131,7 +156,30 @@ STUCK_S = 120.0
 # Blocks a stop whose position could not be read is kept, price by price, to be judged once the position is read.
 UNJUDGED_MAX = 200
 BLIND_ALARM_BLOCKS = 30
-ALIVE_EVERY_S = 600.0
+# How often the loop says it is alive, with the requests it made of its node since, by method.
+ALIVE_EVERY_S = 60.0
+# How often the loop measures again how its node numbers the block of a call at `latest` (`sk.numbering`).
+NUMBERING_EVERY_S = sk.NUMBERING_EVERY_S
+# Blocks whose line of the journal carries no price at all (or that have no line: not read back) are an alarm once
+# they are more than UNPRICED_SHARE of the blocks of the last UNPRICED_WINDOW_S, with or without a stop standing: a
+# journal of empty lines checks nothing. Judged from UNPRICED_MIN blocks on; said again at most once in
+# UNPRICED_REALARM_S while it lasts.
+UNPRICED_WINDOW_S = 600.0
+UNPRICED_SHARE = 0.10
+UNPRICED_MIN = 30
+UNPRICED_REALARM_S = 3_600.0
+# A block the node did not answer for by its number, with a stop standing, is an alarm at most once in this many
+# seconds; the ones between are lines, and each is a gap of the journal.
+READ_BACK_REALARM_S = 3_600.0
+# A look's number is held against the node's own record of that block (one eth_getBlockByNumber) when the look itself
+# gives a reason to doubt it, and at least once in CONFIRM_EVERY_S whatever it says (review 20 of #342): a numbering
+# that moved since it was measured is caught within a minute even when nothing the looks say betrays it. A look that
+# does not hold, with the numbering measured as before, is an alarm at most once in LOOK_WRONG_REALARM_S.
+CONFIRM_EVERY_S = 60.0
+LOOK_WRONG_REALARM_S = 3_600.0
+# A block read back by its number is taken only from a node whose answers by number were held against the loop's own
+# looks within READ_BACK_CHECK_EVERY_S (`StopLoop._read_back_holds`).
+READ_BACK_CHECK_EVERY_S = 600.0
 GWEI = 10 ** 9
 # A stop's transaction with no receipt this long is signed again under its nonce with fees a quarter higher (a
 # replacement: only one of them can land), up to MAX_BUMPS times; a transaction of the keeper's waits RESEND_AFTER_S.
@@ -223,8 +271,15 @@ class Node:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": c.USER_AGENT, "Content-Type": "application/json"})
+        self.counts: dict[str, int] = {}  # requests by method since last taken (`taken`): the stops' thread alone
+
+    def taken(self) -> dict[str, int]:
+        """The requests made since they were last taken, by method: what a node paid by the request is paid for."""
+        counts, self.counts = self.counts, {}
+        return dict(sorted(counts.items()))
 
     def call(self, method: str, params=()):
+        self.counts[method] = self.counts.get(method, 0) + 1
         try:
             resp = self.session.post(self.url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
                                      timeout=self.timeout)
@@ -687,6 +742,18 @@ class Alarm:
 
 # ── the loop ─────────────────────────────────────────────────────────────────────────
 
+class Look(typing.NamedTuple):
+    """What one call read of one block: the block the call itself says it ran in (counted back by the node's
+    numbering), its time by the same call, the oracle price of each asset read, and the assets asked for. `burned`:
+    the ones that failed after another failed before them in the call, which may have failed for its burned gas
+    alone, and are read again one by one (`_read_alone`)."""
+    block: int
+    t: int | None
+    px: dict
+    asked: frozenset
+    burned: frozenset = frozenset()
+
+
 class StopLoop:
     """The stops and takes of the keeper's exams, every block (see the module's text). `keeper` is the SimKeeper whose
     pools and accounts are watched; `wallet` and `sender` are None for a watch that sends nothing."""
@@ -695,8 +762,29 @@ class StopLoop:
                  journal: PriceJournal | None = None, alarm: Alarm | None = None, backfill: int = BACKFILL,
                  overdue: int = OVERDUE, min_alarm_blocks: int = MIN_ALARM_BLOCKS, catchup: int = CATCHUP,
                  clock=time.time, min_runway: int = MIN_RUNWAY_FILLS, assets=None,
-                 review_status: pathlib.Path | None = None):
+                 review_status: pathlib.Path | None = None, multicall: bool = False):
         self.keeper = keeper
+        # With Multicall3 on the chain (`build` looks at the start): one eth_call a look carries the block's number,
+        # its time and every price (`_look`). Without it, the loop as it was: the head, then a call a price.
+        self.multicall = multicall
+        self.ahead: int | None = None  # how the node numbers the block of a call (`sk.numbering`); None: not measured
+        self.ahead_at = 0.0
+        self.ahead_was: int | None = None  # the numbering a look that did not hold set aside, till measured again
+        self.last_look: tuple[int, int | None] | None = None  # the last look's block and time
+        self.confirmed_at = time.monotonic()  # the last time a look's number was held against the node's record
+        self.look_wrong_said_at: float | None = None
+        self.looked: dict[int, dict[int, int]] = {}  # a block -> the prices its own look read at the head
+        self.read_back_off = False  # the node answered an old block with prices other than its look read
+        self.read_back_checked_at: float | None = None
+        self.asked: dict[int, set[int]] = {}  # a block -> the assets its call asked for, read or not
+        self.gap_why = ""
+        self.read_back_said_at: float | None = None
+        self.read_back_unsaid = 0
+        self.held: list[tuple] = []  # the keeper's reads of blocks this loop has not reached yet (`_take_in`)
+        self.feed: queue.Queue | None = None  # each step's blocks and logs, for the keeper's fast loop (`share`)
+        self.lines: collections.deque = collections.deque()  # (this loop's clock, whether a price was read) a block
+        self.unpriced_said_at: float | None = None
+        self.poll: float | None = None
         self.review_status = review_status  # the payout review's status.json, whose age this loop watches
         self.review_at = -REVIEW_EVERY_S
         self.review_said_at: float | None = None
@@ -759,21 +847,25 @@ class StopLoop:
         accounts = [a for a in dict.fromkeys(accounts + sorted(self.extra)) if a not in self.ended and a not in done]
         return accounts, list(self.keeper.pools)
 
-    def reread(self, exam: str, call=None) -> None:
+    def reread(self, exam: str, call=None, batch=None) -> None:
         """An exam's state as the contract holds it, read at one block, and handed to the loop: ended, or its stops and
         takes and its positions. Called by the keeper's slow pass in its thread, and by the watch alone: what was set
         while nothing read the logs (a keeper down, or behind) is known at the next pass. The loop keeps what its own
-        events say after that block."""
+        events say after that block. `batch`: the pass's reads (`sk.Reads`), the exam's among them in one call: taken
+        from it, at the block that call ran in, and nothing more is asked."""
         try:
-            self._reread(exam, call or c.rpc)
+            self._reread(exam, call or c.rpc, batch)
         except Exception as exc:  # the keeper's node answers with errors that name its address: never in a log
             raise RuntimeError(scrub(str(exc))) from None
 
-    def _reread(self, exam: str, call) -> None:
-        at = self.block or int(call("eth_blockNumber"), 16)
+    def _reread(self, exam: str, call, batch=None) -> None:
+        # From a batch: the block its call ran in, which may be past this loop's last (`_take_in` holds it till then).
+        at = batch.block_of[exam] if batch is not None else self.block or int(call("eth_blockNumber"), 16)
         tag = hex(at)
 
         def read(sig, types, args, out):
+            if batch is not None:
+                return batch.read(exam, sig, types, args, out)
             raw = call("eth_call", [{"to": exam, "data": "0x" + c.encode_call(sig, types, args).hex()}, tag])
             return abi_decode(out, bytes.fromhex(raw[2:]))
 
@@ -782,7 +874,7 @@ class StopLoop:
             return
         found: dict[tuple[str, int, bool], tuple[int, int]] = {}
         signs: dict[int, int] = {}
-        for asset in read("rules()", [], [], [sk.RULES])[0][3]:
+        for asset in (batch.assets[exam] if batch is not None else read("rules()", [], [], [sk.RULES])[0][3]):
             asset = int(asset)
             for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
                 px, _, armed, _ = read(getter, ["uint32"], [asset], [sk.TRIGGER])[0]
@@ -791,6 +883,74 @@ class StopLoop:
             if any(k[1] == asset for k in found):
                 signs[asset] = sign_of(read("positionOf(uint32)", ["uint32"], [asset], ["int256"])[0])
         self.inbox.put(("state", exam, at, found, signs))
+
+    def reread_all(self, exams: list[str], keeper, call=None) -> None:
+        """The watch alone: each of `exams` read again (`reread`), all in batches of the keeper's (`sk.Reads`) where
+        Multicall3 is there and the node's numbering is measured, one by one otherwise and for any the batch did not
+        carry. The batch's first call is held to the node's own record of its block (`sk.ran_in`): one that does not
+        hold hands nothing over, and the numbering is measured again. One that cannot be read is said and left for
+        the next pass."""
+        batch = sk.Reads()
+        if getattr(keeper, "multicall", False) is True and exams:
+            try:
+                ahead = keeper.measure_numbering()
+                if ahead is not None:
+                    groups = [(a, [(a, c.encode_call("result()"))] + keeper.stop_reads(a), []) for a in exams]
+                    batch.load(groups, call or c.rpc, ahead)
+                    new = []
+                    for a in exams:
+                        if a not in keeper.rule_assets and batch.raw(a, "rules()") is not None:
+                            keeper.rule_assets[a] = [int(x) for x in batch.read(a, "rules()", [], [], [sk.RULES])[0][3]]
+                            new.append((a, [(a, c.encode_call("result()"))] + keeper.stop_reads(a), []))
+                    if new:
+                        batch.load(new, call or c.rpc, ahead)
+                    if batch.block is not None and not sk.ran_in(call or c.rpc, batch.block, batch.time):
+                        # The call's number and its time are not one block as the node records it: the numbering moved
+                        # since it was measured (review 20 of #342). Nothing of it is handed over; measured again.
+                        keeper.ahead = None
+                        raise RuntimeError(f"the batch's call says block {batch.block}, which the node records with "
+                                           "another time")
+                    batch.assets = {a: keeper.rule_assets[a] for a in exams
+                                    if a in keeper.rule_assets and batch.whole(a, keeper.rule_assets[a])}
+            except Exception as exc:
+                log("stops_batch_unread", error=scrub(str(exc))[:200], then="each exam read alone")
+                batch = sk.Reads()
+        for a in exams:
+            try:
+                if a in batch.assets:  # read whole in one call; with a read of it missing, read again alone
+                    self.reread(a, call, batch=batch)
+                else:
+                    self.reread(a, call)
+            except Exception as exc:
+                log("stops_unread", account=a, error=str(exc)[:200])
+
+    def _take_in(self, head: int | None = None) -> None:
+        """What the keeper's thread handed in, applied: at once when it was read at a block this loop has looked at.
+        A read of a later block (a batch runs at the node's head, which may be a block ahead) is held until that
+        block's events are in: applied before them, it would take a stop filled in that block for one gone while
+        reached, and drop one set in it. `head`: the block of the step that begins; before the loop's first step it
+        is the block a read is held to, the one whose events that step reads."""
+        while True:
+            try:
+                self.held.append(self.inbox.get_nowait())
+            except queue.Empty:
+                break
+        if not self.held:
+            return
+        reached = self.block or head
+        held, self.held = self.held, []
+        for message in held:
+            if reached is not None and message[2] > reached:
+                self.held.append(message)
+            else:
+                self.apply(message)
+
+    def share(self) -> queue.Queue:
+        """From now on each step's blocks and the logs read of them are handed on (`feed`), the orders placed among
+        them: the keeper's fast loop takes its head and its logs from here and asks the node for neither."""
+        if self.feed is None:
+            self.feed = queue.Queue()
+        return self.feed
 
     def apply(self, message: tuple) -> None:
         if message[0] == "ended":
@@ -801,17 +961,21 @@ class StopLoop:
         self.apply_reread(exam, at, found, signs)
 
     def apply_reread(self, exam: str, at: int, found: dict, signs: dict) -> None:
+        """An exam's state read at block `at`, taken where the loop's own events say nothing after it. The events of
+        block `at` itself win over the read too: a read of that block holds them all, and agrees with them; one that
+        disagrees was of an earlier block under a later number (review 20 of #342), and taken it would drop a stop
+        set in that block, or keep one filled in it."""
         if exam in self.ended:
             return
         for key in [k for k in self.triggers if k[0] == exam]:
-            if key not in found and self.event_at.get(key, 0) <= at:
+            if key not in found and self.event_at.get(key, 0) < at:
                 t = self.triggers[key]
                 if t["touch"] is not None:
                     self._missed(key, t, at, "gone from the exam while reached (read from it)")
                 log("stop_dropped_by_read", exam=exam, asset=key[1], take=key[2], at=at)
                 self._drop(key)
         for key, (px, armed) in found.items():
-            if self.event_at.get(key, 0) > at:
+            if self.event_at.get(key, 0) >= at:
                 continue
             t = self.triggers.get(key)
             if t is None:
@@ -824,7 +988,7 @@ class StopLoop:
                 self._drop(key)
                 self.triggers[key] = self._fresh(px, armed)
         for asset, s in signs.items():
-            if self.event_at.get((exam, asset), 0) <= at:
+            if self.event_at.get((exam, asset), 0) < at:
                 self.signs[(exam, asset)] = s
 
     @staticmethod
@@ -837,7 +1001,8 @@ class StopLoop:
         """The time of block `b` for its line of the journal: the head's as it was polled; a block before the head (a
         step over several blocks, its stops at the head sent first) asked of the node, so every line carries it and the
         review's candle screen sees each (review 15 of #338). A node that does not answer leaves it null, which the
-        review holds as not checked."""
+        review holds as not checked. With Multicall3 it is the time the call that read the block's prices said, the
+        head's and a block's read back alike, and the node is asked nothing here."""
         t = self.head_t.get(b)
         if t is not None or b >= head:
             return t
@@ -849,14 +1014,11 @@ class StopLoop:
         self.head_t[b] = t
         return t
 
-    def step(self, head: int) -> list[tuple[str, int, bool]]:
+    def step(self, head: int, look: Look | None = None) -> list[tuple[str, int, bool]]:
         """Everything up to block `head`: the keeper's reads, the logs, each block's prices and its watch, the receipts,
-        then the stops reached at `head` sent for the next block. The keys it sent for."""
-        while True:
-            try:
-                self.apply(self.inbox.get_nowait())
-            except queue.Empty:
-                break
+        then the stops reached at `head` sent for the next block. The keys it sent for. `look`: what the look at the
+        head read with its number (`_look`): the head's prices are those, and no second read of them is made."""
+        self._take_in(head)
         if head <= self.block:
             return []
         lo = head if not self.block else self.block + 1
@@ -877,6 +1039,7 @@ class StopLoop:
             self._blind(lo, price_lo - 1, "the head ran ahead of the loop: the events of these blocks are read, not "
                                           "their prices")
             self._gap(lo, price_lo - 1, "the head ran ahead of the loop: their prices were not read back")
+            self._priced(False, price_lo - lo)
             standing = [k for k, t in self.triggers.items() if t["armed"] < price_lo and self.signs.get(k[:2]) != 0]
             gap_said = bool(standing)
             if standing:
@@ -888,24 +1051,47 @@ class StopLoop:
             # Done in the keeper's thread (released, claimed) before this loop read its last blocks: it has ended.
             self._ended(exam, self.block, "the keeper holds the exam done")
         if not accounts and not pools:
+            if self.feed is not None:
+                self.feed.put((lo, head, []))
             self.block = head
             return []
         cache: dict[int, dict[int, int]] = {}
         sent: list[tuple[str, int, bool]] = []
+        if look is not None and look.block == head:
+            cache[head] = dict(look.px)
+            if look.burned:
+                # Unread in the call after a read that may have burned its gas: each asked again alone, in this step,
+                # before any stop is judged at the head (review 20 of #342).
+                cache[head].update(self._read_alone(head, look.burned))
+            self.asked[head] = set(look.asked)
+            if look.t is not None:
+                self.head_t[head] = look.t
         if lo < head and self.triggers:
             # Behind: the stops reached at the head go out first, and the blocks before it are read after.
-            cache[head] = self._prices(head)
-            sent = self._act(head, cache[head])
+            if head not in cache:
+                first = self._prices(head)
+                if first is not None:
+                    cache[head] = first
+            sent = self._act(head, cache.get(head) or {})
         by_block = self._logs(accounts, pools, lo, head)
         for b in range(lo, head + 1):
             if self.unread_signs:  # read again at the block before, inside the step too: no block judged without them
                 self._read_signs_again(b - 1)
             due: list = []
+            prices = None
             if b >= price_lo:
                 prices = cache.get(b)
                 if prices is None or set(prices) != self._wanted():
-                    prices = self._prices(b)  # a busy node ends the step here; the next one starts at this block
+                    prices = self._prices(b, prices)  # a busy node ends the step here; the next one starts at this block
+            if b >= price_lo and prices is None:
+                # With Multicall3: the node did not answer for this very block by its number. No line of it, a gap:
+                # a price of another block is never written under this one's number.
+                self._unseen(b)
+            elif b >= price_lo:
                 cache[b] = prices
+                if self.multicall:
+                    self._sight(b, prices)
+                self._priced(bool(prices))
                 due = self._watch(b, prices)
                 if self.journal is not None:
                     try:
@@ -928,12 +1114,16 @@ class StopLoop:
                 self.alarm("stop_watch_gap", from_block=lo, to=price_lo - 1, standing=len(self.triggers),
                            why="a stop was set and armed inside blocks whose prices the loop did not read")
             self.block = b
+            if self.held:
+                self._take_in()  # a read of this block, held until its events were in
             if self.sender is not None and b < head:
                 self.sender.serve()  # the keeper's transactions between two blocks, not after the whole step
         sent += self._act(head, cache.get(head) or {}, skip=set(sent))  # the new ones first, then the receipts
         self._receipts(head)
         sent += self._act(head, cache.get(head) or {}, skip=set(sent))  # and the ones a receipt let go
         self._raise_due()  # its reads (was the exam over?) after the stops went out, never before them
+        for b in [b for b in self.asked if b <= head]:
+            del self.asked[b]
         return sent
 
     def _get_logs(self, addresses: list[str], topics: list[str], lo: int, hi: int) -> list[dict]:
@@ -944,7 +1134,9 @@ class StopLoop:
         return out
 
     def _logs(self, accounts: list[str], pools: list[str], lo: int, hi: int) -> dict[int, list[dict]]:
-        found = self._get_logs(accounts + pools, ACCOUNT_TOPICS + POOL_TOPICS, lo, hi)
+        # With the keeper's fast loop fed from here (`share`), the orders placed are read in the same call.
+        orders = [sk.PLACED] if self.feed is not None else []
+        found = self._get_logs(accounts + pools, ACCOUNT_TOPICS + POOL_TOPICS + orders, lo, hi)
         known = set(accounts)
         done = set(self.keeper.done)
         pool_set = {p.lower() for p in pools}
@@ -957,7 +1149,9 @@ class StopLoop:
                     new.append(a)
                     known.add(a)
         if new:  # their stops in the same blocks, which the read above could not name
-            found = found + self._get_logs(new, ACCOUNT_TOPICS, lo, hi)
+            found = found + self._get_logs(new, ACCOUNT_TOPICS + orders, lo, hi)
+        if self.feed is not None:
+            self.feed.put((lo, hi, [l for l in found if l["topics"][0] in FEED_TOPICS]))
         by_block: dict[int, list[dict]] = {}
         for l in found:
             if l["topics"][0] in ACCOUNT_TOPICS and to_checksum_address(l["address"]) in known:
@@ -970,11 +1164,188 @@ class StopLoop:
         """The assets whose price is read in every block: the platform's, and any other with a stop or a take standing."""
         return set(self.assets) | {k[1] for k in self.triggers}
 
-    def _prices(self, block: int) -> dict[int, int]:
+    def _in_order(self, assets=None) -> list[int]:
+        """The assets of one call, the platform's first: a read of the oracle for an asset it does not have burns the
+        gas left to the call, and one such after the platform's takes none of theirs."""
+        wanted = self._wanted() if assets is None else set(assets)
+        return sorted(wanted & self.assets) + sorted(wanted - self.assets)
+
+    def _look(self, tag: str = "latest", assets=None) -> Look:
+        """One eth_call (Multicall3's aggregate3) at `tag`: the block the call itself says it ran in, its time, and the
+        oracle price of each of `assets` (every wanted one when not given), all of one state. The block is the
+        call's, counted back by the node's numbering (`ahead`), never the tag's: a node that answers a tag with
+        another block is seen to. A price that failed alone is left out, the others stand."""
+        assets = self._in_order(assets)
+        number, t, answers = sk.aggregate(
+            self.node.call, [(ORACLE_PX, abi_encode(["uint32"], [px_index(a)])) for a in assets], tag)
+        px: dict[int, int] = {}
+        for asset, raw in zip(assets, answers):
+            if raw is not None and len(raw) == 32:
+                px[asset] = int.from_bytes(raw, "big")
+        failed = [a for a in assets if a not in px]  # in the call's order: the first may have burned the rest's gas
+        return Look(number - (self.ahead or 0), t, px, frozenset(assets), frozenset(failed[1:]))
+
+    def _look_one_by_one(self) -> Look:
+        """A look the old way, for the one whose single call failed whole: the head, then a call a price at the head's
+        number (only for a head not looked at yet)."""
+        got = self.node.call("eth_getBlockByNumber", ["latest", False])
+        head, t = int(got["number"], 16), int(got["timestamp"], 16)
+        assets = self._in_order()
+        px = self._read_alone(head, assets) if head > self.block else {}
+        return Look(head, t, px, frozenset(assets))
+
+    def _read_alone(self, block: int, assets) -> dict[int, int]:
+        """The oracle price of each of `assets` at `block`, a call each, as the loop read them before one call carried
+        them all: a look made the old way, and the assets a look's one call may have lost to a read that burned its
+        gas (`Look.burned`). One that fails is unread in the block's line."""
+        px: dict[int, int] = {}
+        for asset in self._in_order(assets):
+            try:
+                raw = self.node.call("eth_call", [{"to": ORACLE_PX, "data": "0x" + abi_encode(["uint32"], [px_index(asset)]).hex()},
+                                                  hex(block)])
+                px[asset] = int(abi_decode(["uint64"], bytes.fromhex(raw[2:]))[0])
+            except c.NodeBusy:
+                raise
+            except Exception:
+                pass  # not read: unread in this block's line
+        return px
+
+    def _read_back(self, block: int, had: dict[int, int] | None) -> dict[int, int] | None:
+        """With Multicall3, the prices of `block` by its number: one call for all, taken only when the call itself says
+        it ran in that block. None when it did not (a node that answers a tag with its head, or with nothing for a
+        block that is no longer the last): the caller writes a gap. `had`: what the block's own look read; then only
+        the assets that look did not ask for are read here, and one it asked for and did not read stays unread."""
+        wanted = self._wanted()
+        asked = set(self.asked.get(block, ())) if had is not None else set()
+        if had is not None and wanted <= asked:
+            return had
+        if self.ahead is None:
+            self.gap_why = f"asked for block {block}: how the node numbers a call is not measured yet"
+            return had
+        if self.read_back_off:
+            self.gap_why = (f"asked for block {block}: reading back is off, the node answered an old block by its "
+                            "number with prices other than the loop's own look read")
+            return had
+        try:
+            look = self._look(hex(block), wanted - asked)
+            if look.block != block:
+                self.gap_why, look = f"asked for block {block}, the node answered for block {look.block}", None
+            elif not self._read_back_holds():
+                self.gap_why, look = (f"asked for block {block}: the node's answers by number are not held against the "
+                                      "loop's own looks"), None
+        except c.NodeBusy:
+            raise
+        except Exception as exc:
+            self.gap_why, look = f"asked for block {block}, the node did not answer: {scrub(str(exc))[:120]}", None
+        if look is None:
+            return had  # with a look of its own: the assets it did not ask for are unread in this block's line
+        px = dict(look.px)
+        if look.burned:
+            px.update(self._read_alone(block, look.burned))
+        self.asked[block] = asked | set(look.asked)
+        if look.t is not None:
+            self.head_t.setdefault(block, look.t)
+        return {**(had or {}), **px}
+
+    def _read_back_holds(self) -> bool:
+        """Whether a block's prices read back by its number can be taken: the node's answers by number held against
+        the loop's own looks, at least once in READ_BACK_CHECK_EVERY_S (review 20 of #342). A block a look read at the
+        head, behind the head now, is asked for again by its number. A node that answers an old number with that
+        block's number and time but the state of its head (an oracle with no past) says the head's prices for it:
+        then reading back is off for this run, with an alarm, and every block missed between two looks is a gap,
+        never a line with another block's price. Only a block whose prices differ from the last look's can tell; with
+        none kept, the check waits for one and costs nothing. A check that cannot be made takes nothing back."""
+        if self.read_back_off:
+            return False
+        now = time.monotonic()
+        if self.read_back_checked_at is not None and now - self.read_back_checked_at < READ_BACK_CHECK_EVERY_S:
+            return True
+        top = max(self.looked, default=None)
+        last = self.looked.get(top, {})
+        telling = [b for b in sorted(self.looked, reverse=True)
+                   if b < top and any(a in last and px != last[a] for a, px in self.looked[b].items())]
+        if not telling:
+            return True
+        b = telling[0]
+        mine = self.looked[b]
+        try:
+            again = self._look(hex(b), set(mine))
+        except c.NodeBusy:
+            raise
+        except Exception as exc:
+            self._say("stop_read_back_unchecked", block=b, error=scrub(str(exc))[:120])
+            return False
+        if again.block != b:
+            self._say("stop_read_back_unchecked", block=b, answered=again.block)
+            return False
+        self.read_back_checked_at = now
+        wrong = sorted(a for a, px in mine.items() if a in again.px and again.px[a] != px)
+        if not wrong:
+            return True
+        self.read_back_off = True
+        self.alarm("stop_read_back_off", block=b, assets=wrong,
+                   why="the node answered a block by its number with other prices than the loop's own look read at it "
+                       "(no past of the oracle's state): reading back is off for this run, and a block missed between "
+                       "two looks is a gap of the journal")
+        return False
+
+    def _sight(self, block: int, prices: dict[int, int]) -> None:
+        """With Multicall3, what `_prices` says of a block as it reads it without: blind while an asset with a stop
+        standing has no price in it, seeing again once every wanted one is read."""
+        wanted = self._wanted()
+        unread = sorted(wanted - set(prices))
+        if set(unread) & {k[1] for k in self.triggers}:
+            self._blind(block, block, f"assets {unread}: not read in the block's call")
+        elif self.blind_from is not None and wanted and not unread:
+            log("stop_watch_sees_again", blind_from=self.blind_from, to=block - 1)
+            self.blind_from, self.blind_said = None, False
+
+    def _unseen(self, block: int) -> None:
+        """A block the node did not answer for by its number: a gap of the journal, nothing judged in it. With a stop
+        standing it is an alarm, at most once in READ_BACK_REALARM_S; the ones between are counted into the next."""
+        why = f"not read back: {self.gap_why}"
+        self._blind(block, block, why)
+        self._gap(block, block, why)
+        self._priced(False)
+        standing = [k for k, t in self.triggers.items() if t["armed"] <= block and self.signs.get(k[:2]) != 0]
+        if not standing:
+            return
+        self.read_back_unsaid += 1
+        now = time.monotonic()
+        if self.read_back_said_at is None or now - self.read_back_said_at >= READ_BACK_REALARM_S:
+            self.read_back_said_at = now
+            blocks, self.read_back_unsaid = self.read_back_unsaid, 0
+            self.alarm("stop_read_back_gap", block=block, blocks=blocks, standing=len(standing), reason=self.gap_why,
+                       why="the node does not answer for a block by its number: the blocks this loop missed between "
+                           "two looks are gaps of the journal, with stops armed")
+
+    def _priced(self, priced: bool, blocks: int = 1) -> None:
+        """One block's line counted, with or without a price (`blocks` of them: the ones a step left as a gap because
+        the head ran ahead of its read-back; the blocks a loop was not running in are not counted): more than
+        UNPRICED_SHARE of the last UNPRICED_WINDOW_S without one is an alarm, whether a stop stands or not, said
+        again at most once in UNPRICED_REALARM_S."""
+        now = self.clock()
+        self.lines.extend([(now, priced)] * blocks)
+        while self.lines and self.lines[0][0] < now - UNPRICED_WINDOW_S:
+            self.lines.popleft()
+        without = sum(1 for _, ok in self.lines if not ok)
+        if len(self.lines) < UNPRICED_MIN or without <= UNPRICED_SHARE * len(self.lines):
+            return
+        if self.unpriced_said_at is not None and now - self.unpriced_said_at < UNPRICED_REALARM_S:
+            return
+        self.unpriced_said_at = now
+        self.alarm("stop_prices_unread", blocks=len(self.lines), without=without, seconds=int(UNPRICED_WINDOW_S),
+                   why="more than a tenth of the last ten minutes' blocks have no price in the journal: the node does "
+                       "not answer the oracle's reads, and the journal checks nothing meanwhile")
+
+    def _prices(self, block: int, had: dict[int, int] | None = None) -> dict[int, int] | None:
         """The oracle price, at `block`, of each platform asset and each asset with a stop or a take standing that was
         read: one that was not leaves its stops unjudged in this block and the others as they are. Every one goes to the
         journal, a stop known or not: after a restart the loop knows no stop until the keeper's slow pass rereads the
-        exams, and the journal must hold their blocks all the same."""
+        exams, and the journal must hold their blocks all the same. With Multicall3 it is `_read_back`'s one call, and
+        None when the node did not answer for that very block."""
+        if self.multicall:
+            return self._read_back(block, had)
         assets = sorted(self._wanted())
         prices: dict[int, int] = {}
         unread: list[int] = []
@@ -1443,25 +1814,159 @@ class StopLoop:
                    why="the payout review has not finished a pass for too long: no document is fresh, approve refuses "
                        "every payout, a held payout is not said again (see colosseum-payout-review@ on the host)")
 
+    def _numbering(self) -> None:
+        """How the node numbers the block of a call at `latest` (`sk.numbering`), measured before the first look and
+        every NUMBERING_EVERY_S after: the head is the call's number less this. A node whose number cannot be read
+        that way ends the one-call looks for this run, with an alarm: the loop goes on as it was without Multicall3.
+        A measure that changed is an alarm and is taken: changed from the last one taken, or from the one a look that
+        did not hold set aside (`_checked`)."""
+        if self.ahead is not None and time.monotonic() - self.ahead_at < NUMBERING_EVERY_S:
+            return
+        try:
+            got = None
+            for _ in range(3):  # a block may come between the two reads of the head: measured again
+                got = sk.numbering(self.node.call, lambda: int(self.node.call("eth_blockNumber"), 16))
+                if got is not None:
+                    break
+        except sk.BadNumbering as exc:
+            self.multicall = False
+            self.alarm("stop_one_call_off", error=str(exc)[:200],
+                       why="the block number of a call at the head is not the head's or the next: every look is the "
+                           "head and a call a price again, as without Multicall3")
+            return
+        except Exception:
+            if self.ahead is None:
+                raise  # not measured yet: this look fails, the next one measures again
+            got = None
+        if got is None:
+            if self.ahead is None:
+                raise RuntimeError("the head moved at each measure of the node's numbering; measured again at the next look")
+            self.ahead_at += 5.0  # measured before: again in a few seconds
+            return
+        was = self.ahead if self.ahead is not None else self.ahead_was
+        if was is not None and got != was:
+            self.alarm("stop_numbering_changed", was=was, now=got,
+                       why="the node numbers the block of a call another way than at the last measure")
+        self.ahead, self.ahead_at, self.ahead_was = got, time.monotonic(), None
+
+    def _head(self) -> tuple[int, int, Look | None]:
+        """One look at the head. With Multicall3 one eth_call says its number, its time and every wanted price, all of
+        one state (`_look`), its number held to the block it ran in (`_checked`); when that call fails whole (not the
+        node being busy or out of reach), this look is made the old way, the head and then a call a price. Without
+        Multicall3: the head alone, the prices in the step."""
+        if self.multicall:
+            try:
+                self._numbering()
+            except (c.NodeBusy, Unsure, Unreached):
+                raise
+            except Exception as exc:  # not measured: the head moved at each try, or the measure's own call failed
+                self._say("stop_numbering_unread", error=scrub(str(exc))[:200],
+                          then="this look the old way: the head, a call a price; measured again at the next look")
+        if not self.multicall:
+            got = self.node.call("eth_getBlockByNumber", ["latest", False])
+            return int(got["number"], 16), int(got["timestamp"], 16), None
+        if self.ahead is None:
+            # The call's number cannot be counted back yet: the loop does not stand still for it, nor the keeper's
+            # fast loop behind it. A block missed meanwhile is a gap (`_read_back`).
+            look = self._look_one_by_one()
+        else:
+            try:
+                look = self._checked(self._look())
+            except (c.NodeBusy, Unsure, Unreached):
+                raise
+            except Exception as exc:
+                self._say("stop_look_failed", error=scrub(str(exc))[:200], then="this look the old way: the head, a call a price")
+                look = self._look_one_by_one()
+        self.last_look = (look.block, look.t)
+        return look.block, look.t, look
+
+    def _doubted(self, look: Look) -> str | None:
+        """Why a look's number may not be the block its call ran in, from what it says against what the loop has seen,
+        with no request (review 20 of #342). Both kinds of node say the head's time in a call, whatever number they
+        say, so a numbering that moved since it was measured shows as a block seen before with another time, a new
+        block with the last look's time, or blocks skipped: a look that would step past the node's head is one of
+        these at the moment the numbering moves, polled twice a block or not, and so is one a block behind it unless
+        it comes exactly two blocks on, which the look held once a minute catches (`_checked`)."""
+        seen = self.head_t.get(look.block)
+        if seen is not None and seen != look.t:
+            return f"block {look.block} was looked at with the time {seen}, this call says {look.t}"
+        if self.last_look is not None and look.block != self.last_look[0] and look.t == self.last_look[1]:
+            return f"block {look.block} says the time of block {self.last_look[0]}"
+        if self.block and look.block > self.block + 1:
+            return f"block {look.block} after {self.block}: blocks between would be skipped"
+        return None
+
+    def _checked(self, look: Look) -> Look:
+        """The look to step by. One the loop has no reason to doubt (`_doubted`) is taken as it is, but at least once in
+        CONFIRM_EVERY_S it is held against the node's own record of its block, as a doubted one is: one request, by
+        the look's number, whose time must be the call's. One that does not hold makes no step by its number: the
+        numbering is measured again at once (a change is an alarm), every look is made the old way till it is, and
+        so is this one, the head as the node says it. Measured as before with the node recording that number under
+        another time, it is an alarm too, at most once in LOOK_WRONG_REALARM_S."""
+        why = self._doubted(look)
+        now = time.monotonic()
+        if why is None and now - self.confirmed_at < CONFIRM_EVERY_S:
+            self._keep(look)
+            return look
+        self.confirmed_at = now
+        try:
+            recorded = sk.block_time(self.node.call, look.block)
+        except (c.NodeBusy, Unsure, Unreached):
+            raise
+        except Exception:
+            recorded = None
+        if recorded == look.t:
+            self._keep(look)
+            return look
+        log("stop_look_unconfirmed", block=look.block, t=look.t, recorded=recorded, why=why or "held once a minute",
+            then="measured again; this look the old way")
+        self.looked.clear()  # looks since the last that held may be of other blocks than their numbers: none kept
+        was = self.ahead
+        self.ahead_was, self.ahead = was, None
+        try:
+            self._numbering()
+        except (c.NodeBusy, Unsure, Unreached):
+            raise
+        except Exception as exc:
+            self._say("stop_numbering_unread", error=scrub(str(exc))[:200],
+                      then="every look the old way, the head and a call a price, till it is measured")
+        if recorded is not None and self.ahead == was and (
+                self.look_wrong_said_at is None or now - self.look_wrong_said_at >= LOOK_WRONG_REALARM_S):
+            self.look_wrong_said_at = now
+            self.alarm("stop_look_wrong", block=look.block, said=look.t, recorded=recorded, why=why or "held once a minute",
+                       note="the numbering measured again is the same: the node's calls and its own record of a block "
+                            "disagree (one address, several servers?)")
+        return self._look_one_by_one()
+
+    def _keep(self, look: Look) -> None:
+        """A look at the head that held: its prices, for the check of the node's answers by number (`_read_back_holds`),
+        for as many blocks back as the loop reads back."""
+        self.looked[look.block] = dict(look.px)
+        for b in [b for b in self.looked if b < look.block - self.backfill]:
+            del self.looked[b]
+
     def run(self, poll: float, stop: threading.Event | None = None) -> None:
         """Forever (or until `stop`): the head every `poll` seconds, and a step for each new one; between them, the keeper's
         transactions. Nothing here waits on the keeper's thread; a busy node costs the look it refused."""
         stop = stop or threading.Event()
+        self.poll = poll
+        self.alive_at = time.monotonic()
         log("stop_loop_started", node=node_said(self.node.url), tip_wei=self.tip, sends=self.sender is not None,
             journal=str(self.journal.path) if self.journal else None,
-            flag=str(self.alarm.flag) if self.alarm.flag else None)
+            flag=str(self.alarm.flag) if self.alarm.flag else None,
+            poll=poll, looks_a_minute=round(60 / poll) if poll > 0 else None, one_call=self.multicall,
+            feeds_orders=self.feed is not None)
         while not stop.is_set():
             until = time.monotonic() + poll
             try:
-                got = self.node.call("eth_getBlockByNumber", ["latest", False])
-                head, head_t = int(got["number"], 16), int(got["timestamp"], 16)
+                head, head_t, look = self._head()
                 self.beat = time.monotonic()
                 self.head_t[head] = head_t
                 for b in [b for b in self.head_t if b < head - CATCHUP]:
                     del self.head_t[b]
                 self._head_fresh(head, head_t)
                 if head > self.block:
-                    self.step(head)
+                    self.step(head, look)
                 self._behind(head)
                 self._balance()
                 self._review_age()
@@ -1473,9 +1978,10 @@ class StopLoop:
             except Exception as exc:
                 self._failed("stop_loop_failed", exc)
             if time.monotonic() - self.alive_at >= ALIVE_EVERY_S:
-                self.alive_at = time.monotonic()
+                seconds, self.alive_at = time.monotonic() - self.alive_at, time.monotonic()
+                # The requests made of the node since the last such line, by method: no address of the node.
                 log("stop_loop_alive", block=self.block, standing=len(self.triggers), in_flight=len(self.pending),
-                    blind_from=self.blind_from)
+                    blind_from=self.blind_from, seconds=round(seconds), requests=self.node.taken())
             self._served(until, stop)
 
 
@@ -1514,7 +2020,11 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--stop-tip-gwei", type=float, default=float(os.environ.get("COLOSSEUM_STOP_TIP_GWEI", "0") or 0),
                    help="with --stops loop: the priority fee of a stop's transaction, in gwei; zero, as every send of the "
                         "keeper's")
-    p.add_argument("--stop-poll", type=float, default=None, help="seconds between looks at the head (default --poll)")
+    p.add_argument("--stop-poll", type=float,
+                   default=float(os.environ["COLOSSEUM_STOP_POLL"]) if os.environ.get("COLOSSEUM_STOP_POLL", "").strip() else None,
+                   help="seconds between looks at the head (COLOSSEUM_STOP_POLL; default --poll, twice a second, so "
+                        "that no block of a second goes by between two looks; 1 halves the looks, and a block missed "
+                        "between two is read back by its number or is a gap of the journal)")
     p.add_argument("--stop-overdue", type=int, default=OVERDUE, help="blocks a reach may last unfilled before its alarm")
     p.add_argument("--stop-alarm-min-blocks", type=int, default=MIN_ALARM_BLOCKS,
                    help="a reach the price ended in fewer blocks is a line, not an alarm (1: every one an alarm)")
@@ -1546,11 +2056,15 @@ def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> S
     """The loop from the settings, its node checked against the network; a sender for the key when there is a wallet.
     `prefix` keeps the default files of a watch alone apart from the keeper's. On mainnet, not without an alarm channel."""
     require_channel("the stops' loop")
+    poll = getattr(args, "stop_poll", None)
+    if isinstance(poll, (int, float)) and not isinstance(poll, bool) and poll <= 0:
+        raise SystemExit("--stop-poll must be more than zero")
     url = args.stop_rpc or c.RPC_URL
     node = Node(url)
     if c.NETWORK.name == "mainnet":
         core.check_node(url, c.CHAIN_ID)
     check_chain(node)
+    multicall = sk.multicall_or_not(node.call, "the stops' loop")
     journal_path = (state.parent / f"{prefix}prices-{args.deployment}.jsonl") if args.price_journal is None else (
         pathlib.Path(args.price_journal) if args.price_journal else None)
     flag = (state.parent / f"{prefix}stops-{args.deployment}.alarm") if args.stop_alarm is None else (
@@ -1563,7 +2077,7 @@ def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> S
                                                                "label": args.deployment}) if journal_path else None,
                     alarm=Alarm(flag),
                     overdue=args.stop_overdue, min_alarm_blocks=args.stop_alarm_min_blocks,
-                    review_status=review_status_of(args))
+                    review_status=review_status_of(args), multicall=multicall)
 
 
 def start(loop: StopLoop, poll: float) -> threading.Thread:
@@ -1576,14 +2090,13 @@ def watch_pass(keeper, loop: StopLoop) -> None:
     """The watch alone, every --every seconds: new pools and accounts, and each one not known to have ended read again
     (an exam that ended is told to the loop by its own read)."""
     keeper.scan(int(c.rpc("eth_blockNumber"), 16))
+    live = []
     for a in keeper.live():
         if a in loop.ended:
             keeper.done.add(a)
             continue
-        try:
-            loop.reread(a)
-        except Exception as exc:
-            log("stops_unread", account=a, error=str(exc)[:200])
+        live.append(a)
+    loop.reread_all(live, keeper)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1611,8 +2124,12 @@ def main(argv: list[str] | None = None) -> int:
     state = pathlib.Path(args.state) if args.state else sk.STATE_DIR / f"watch-{args.deployment}.json"
     keeper = sk.SimKeeper(record["SimPoolFactory"], None, "0x" + "00" * 20, True, state, int(record["block"]))
     loop = build(args, keeper, state, prefix="watch-")
+    counted = sk.count_requests()  # the pass's own reads (the loop's node counts its own, `stop_loop_alive`)
+    # The pass reads through the plumbing's node, the loop through its own (--stop-rpc): each is asked for itself.
+    keeper.multicall = sk.multicall_or_not(c.rpc, "the watch's pass")
     poll = args.stop_poll or args.poll
     thread = start(loop, poll)
+    alive_at = time.monotonic()
     while True:
         try:
             watch_pass(keeper, loop)
@@ -1621,6 +2138,9 @@ def main(argv: list[str] | None = None) -> int:
         deadline = time.monotonic() + args.every
         while time.monotonic() < deadline:
             thread = keep_alive(loop, thread, poll)
+            if time.monotonic() - alive_at >= ALIVE_EVERY_S:
+                seconds, alive_at = time.monotonic() - alive_at, time.monotonic()
+                log("watch_alive", live=len(keeper.live()), seconds=round(seconds), requests=counted.taken())
             time.sleep(min(5.0, max(0.0, deadline - time.monotonic())))
 
 
