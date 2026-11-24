@@ -1152,9 +1152,7 @@ class StopLoop:
         except Exception as exc:
             self.gap_why, look = f"asked for block {block}, the node did not answer: {scrub(str(exc))[:120]}", None
         if look is None:
-            if had is not None:
-                self.asked[block] = wanted  # asked for now, and not read: unread in this block's line
-            return had
+            return had  # with a look of its own: the assets it did not ask for are unread in this block's line
         self.asked[block] = asked | set(look.asked)
         if look.t is not None:
             self.head_t.setdefault(block, look.t)

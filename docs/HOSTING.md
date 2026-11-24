@@ -786,14 +786,48 @@ removes it. An alarm also goes to the journal as an `ALARM` line
 and, when `COLOSSEUM_ALERT_CMD` is set, to that command, as the watchdogs' do. Its other settings, also in
 `keeper-<name>.env` and each the old behaviour when not set: `COLOSSEUM_STOP_RPC_URL`, a node for the stops and the
 key's transactions (the keeper's node when empty; on mainnet not the gateway's); `COLOSSEUM_STOP_TIP_GWEI`, the
-stops' priority fee (zero when empty). On the keeper's node the loop adds, as a base, a look at the head every half
-second, one `eth_getLogs` a block (one for each 50 blocks it reads back) and one `eth_call` a block for each asset with
-a stop standing. On top of that, as they come: a second `eth_getLogs` for a block with a sale, a position read for each
-stop set or fill, a receipt read a block for each stop in flight, a gas price read every ten blocks, the keeper's own
-transactions, and four reads before each alarm (whether the exam was over). A node of its own takes that load and
-the rate limit off the keeper's and the gateway's address; the head is read with its time
-(`eth_getBlockByNumber`), and the key's balance every five minutes. With `COLOSSEUM_STOPS=inline` none of this runs,
-and the payout review holds every payout with a stop.
+stops' priority fee (zero when empty); `COLOSSEUM_STOP_POLL`, the seconds between two looks at the head (0.5 when
+empty: two looks a second, so that no block of a second goes by between two; `1` halves the looks).
+
+What the keeper asks of its node, on a node paid by the request. A look at the head is one `eth_call`: Multicall3's
+`aggregate3` at `latest` (it stands at `0xcA11bde05977b3631167028862bE2a173976CA11` on both networks) answers with
+the block's number, its time and the oracle price of every platform asset and every asset with a stop standing, all
+of one state, and the journal's line takes its number and its time from that call. There is one `eth_getLogs` a block
+(one for each 50 blocks read back), and it serves the stops and the orders alike: the keeper's fast loop takes its
+head and its logs from the stops' loop and asks for neither. The slow pass, every 30 seconds, asks the head, the
+scan's `eth_getLogs`, and its reads of the pools and the accounts in batches of at most 100 through the same
+Multicall3 (fifteen reads an account with three assets, an account never cut in two: six accounts a call). Counted
+between the process and a stand-in node, a block a second, three assets, one minute:
+
+| | before | now |
+|---|---|---|
+| keeper with the stops' loop, 3 accounts | 638 (`eth_call` 276, `eth_getLogs` 122, `eth_getBlockByNumber` 120, `eth_blockNumber` 120) | 185 (`eth_call` 121, `eth_getLogs` 62, `eth_blockNumber` 2) |
+| the same, 100 accounts | 3 541 (`eth_call` 3 186) | 217 (`eth_call` 153) |
+| the second writer of prices | 358 (`eth_call` 180, `eth_getBlockByNumber` 118, `eth_getLogs` 60) | 179 (`eth_call` 119, `eth_getLogs` 60); 121 with `COLOSSEUM_STOP_POLL=1` |
+
+A month is 43 200 minutes: 8.0 million requests for the keeper where it was 27.6 million, and 1.4 million more for
+each hundred accounts where it was 125 million. On top of that, as they come: a block that went by between two looks
+is asked for by its number, one call (20 a step at most); a second `eth_getLogs` for a block with a sale; a position
+read for each stop set or fill; a receipt read a block for each stop in flight; a gas price read every ten blocks;
+the keeper's own transactions; four reads before each alarm (whether the exam was over); the key's balance every
+five minutes; and three requests every ten minutes that measure how the node numbers the block of a call. Each
+process says what it asked once a minute, by method and with no address of the node: `stop_loop_alive` (the stops'
+loop), `keeper_alive` (the keeper's own thread), `watch_alive` (the second writer's pass): `requests` is the count
+since the last such line.
+
+A node answers a read "at block N" as it likes: Hyperliquid's own nodes answer it at their head (read on both
+networks on 24 November 2026), others with nothing for a block that is no longer the last. So a block asked for by
+its number is taken only when the call itself says it ran in that block; otherwise the block is a gap of the
+journal, which the payout review holds as not checked, and an alarm at most once an hour when a stop stood armed in
+it (`stop_read_back_gap`). The same nodes run a call at `latest` as the block to come, the next number with the
+head's time: the loop measures that at its start, between two reads of the head that agree, and counts the number
+back (`stop_numbering_changed` if a later measure differs, `stop_one_call_off` if the number is neither the head's
+nor the next: the loop then goes on as it was before, a call a price). More than a tenth of the last ten minutes'
+blocks with no price in the journal is an alarm whether a stop stands or not (`stop_prices_unread`, said again at
+most once an hour). Without Multicall3 on the chain the keeper and the loop work as they did, a read a request, and
+say so once at the start (`no_multicall`); on mainnet, where it stands, they do not start without it. A node of the
+loop's own takes its load and the rate limit off the keeper's and the gateway's address. With
+`COLOSSEUM_STOPS=inline` none of this runs, and the payout review holds every payout with a stop.
 
 It sends with the factory's **filler**, the one key whose fills the exams take; any other key would only log.
 The **checker**, the one key that may stop a payout, is kept beside it for `colosseum-sim-checker@<name>` ("A simulated

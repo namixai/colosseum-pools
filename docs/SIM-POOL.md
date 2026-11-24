@@ -343,9 +343,12 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   so two orders in one block go one after the other. The same loop keeps every running exam's stops and
   takes from their events and tries each armed one once a block by a call that changes nothing, sending
   `fillTrigger` when the exam would take it; with `--stops loop` they are a loop's of their own instead,
-  in a thread beside this one ("The stops", below). A slow pass
+  in a thread beside this one ("The stops", below), and the fast loop takes its head and each block's
+  logs from that loop: one look and one `eth_getLogs` a block for both. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
-  `expire`, `release`, `claimPayout`, `pay`. It reads the pool's `payRoom()` and sends `pay` only for
+  `expire`, `release`, `claimPayout`, `pay`. Its reads go in batches of at most a hundred in one
+  `eth_call` (Multicall3), each read allowed to fail by itself and then asked alone, an account never
+  cut in two. It reads the pool's `payRoom()` and sends `pay` only for
   as many payouts as the daily limit has room for: none while the day's two are settled (it logs
   `pay_waits_limit` with `nextPayAt()`, once for each change), though it still moves the head past
   settled payouts. One `pay` is told to pay at most the day's two payouts and to look
@@ -705,9 +708,17 @@ spots there: its slow pass, a receipt it waits for, and a node's rate limit (up 
 By default (`--stops loop`, COLOSSEUM_STOPS; `inline` is the way back to the keeper as it was, with none of what follows)
 the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a thread beside its own loops:
 
+- every look (two a second; `--stop-poll`, COLOSSEUM_STOP_POLL): one `eth_call` of Multicall3's `aggregate3` at
+  `latest`, which answers with the block's number, its time and the oracle price of every platform asset and every
+  asset with a stop or a take standing, all of one state. The journal's line takes its number and its time from
+  that call, not from a tag of the request; a price that fails alone leaves the others in the line. A node that
+  runs a call at `latest` as the block to come (Hyperliquid's own do: the next number, the head's time) is measured
+  at the start and its number counted back. If the call fails whole, that one look is the head and then a call a
+  price, as before; without Multicall3 on the chain every look is (and on mainnet the loop does not start);
 - every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the
-  fills that move a position, exams sold and ended), one read of the oracle price for each asset with a stop or a
-  take standing, and the comparison made by the loop itself, not one `eth_call` a stop;
+  fills that move a position, exams sold and ended), and the comparison made by the loop itself, not one `eth_call`
+  a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
+  to the keeper's fast loop, which asks the node for no head and no logs of its own;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);
@@ -725,8 +736,12 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   still out of a block after two minutes (the gas price left it behind, say) is an alarm (`send_stuck`);
 - the slow pass, a receipt the keeper's own thread waits for, and that thread's retry ladder hold only that
   thread. Every call of the loop is tried once: a busy node costs it that look. The blocks it missed are read back
-  the next time, their events always (1 000 blocks at most) and their prices for the last 20; the head's stops go
-  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`). Blocks skipped by
+  the next time, their events always (1 000 blocks at most) and their prices for the last 20, each by its number in
+  one call and taken only when the call itself says it ran in that block: a node that answers a number with its
+  head, or with nothing, gives a gap of the journal and never a line with another block's price (an alarm at most
+  once an hour with a stop armed, `stop_read_back_gap`); the head's stops go
+  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`), and more than a
+  tenth of the last ten minutes' blocks without one is an alarm with or without a stop (`stop_prices_unread`). Blocks skipped by
   the read-back of prices are an alarm at once when a stop stood armed in them or was set and armed in them
   (`stop_watch_gap`); a price read that fails block by block is an alarm only once 30 blocks in a row have no price
   with a stop standing (`stop_watch_blind_long`); past 1 000 the
@@ -737,17 +752,21 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   not hide a reach; a read of the past that fails keeps them first in line for the next step, and a stop that ends
   before they are judged is an alarm (`stop_unjudged`);
 - a stop set while the keeper was down or behind its logs is read back from the exam by the slow pass at one
-  block and handed to the loop (`stop_found_by_read`); a stop set on an exam sold in the same blocks is known in
-  the step that sees the sale;
+  block and handed to the loop (`stop_found_by_read`): the exam's status, its stops, takes and positions come in
+  one call with the pass's other reads, and the loop takes them at the block that call ran in, once that block's
+  own events are in; a stop set on an exam sold in the same blocks is known in the step that sees the sale;
 - the keeper's loop checks that the thread is there and moving: one that ended is an alarm and is started again,
   one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds (one alarm an
   hour at most, the episodes between said as lines) and 30 blocks without prices while a stop stands. An alarm's own
-  reads (whether the exam was over) are made after the step's stops went out. A line `stop_loop_alive` every ten minutes says it works.
+  reads (whether the exam was over) are made after the step's stops went out. A line `stop_loop_alive` every minute
+  says it works, with the requests it asked of its node since the last, by method (`keeper_alive` is the keeper's own).
 
-Two settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
-loop reads through and the key's transactions go to, the keeper's own when empty; and `--stop-tip-gwei`
-(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty. On mainnet the stops' node
-must not be the gateway's, as the keeper's must not.
+Three settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
+loop reads through and the key's transactions go to, the keeper's own when empty; `--stop-tip-gwei`
+(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty; and `--stop-poll`
+(COLOSSEUM_STOP_POLL), the seconds between two looks at the head, half a second when empty. On mainnet the stops'
+node must not be the gateway's, as the keeper's must not. What all of it asks of a node is counted in
+docs/HOSTING.md.
 
 The watch runs on the same prices. For each stop or take standing, armed, with a position open, a stretch of
 blocks in which the oracle stood at it or past it is a reach. A reach that ends with no `TriggerFilled` in it,
@@ -787,7 +806,7 @@ keeps old blocks:
   discount to it, and a thin book prints wicks): 1 % is far past either for BTC, ETH and SOL in a calm market, and
   near enough not to hide a reach by more than that. Fewer than 90 % of a stop's minutes with a candle is a doubt too,
   and so is a block whose journal line carries no time (it falls in no minute: not screened). The stops' loop writes
-  each block's time on its line, a block before the head of a step over several asked of the node;
+  each block's time on its line, as the call that read the block's prices said it;
 - optionally, a node that answers for old blocks (`COLOSSEUM_ARCHIVE_RPC_URL`): calibrated on the chain's prices and
   asked for a sample of 200 blocks an account (`--journal-checks`, at least 1; one block of each asset with a stop
   first, and an asset none of whose blocks was asked is a doubt), and for each block only one journal

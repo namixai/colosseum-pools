@@ -1634,7 +1634,7 @@ class TheKeeperWithTheLoop(unittest.TestCase):
         with mock.patch.dict("os.environ", env), \
                 mock.patch.object(sk.deployments, "load", return_value={"SimPoolFactory": "0x" + "33" * 20, "block": 1}), \
                 mock.patch.object(sk.sn, "confirm_service"), mock.patch.object(sk, "SimKeeper", return_value=k), \
-                mock.patch.object(k, "slow_pass"), mock.patch.object(k, "fast_step"), \
+                mock.patch.object(k, "slow_pass"), mock.patch.object(k, "fast_step") as fast, \
                 mock.patch.object(sk.c, "rpc", return_value="0x1"), mock.patch.object(sk.time, "sleep", side_effect=Out), \
                 mock.patch.object(k, "fed_step", side_effect=Out) as fed, \
                 mock.patch.object(sf, "build") as build, mock.patch.object(sf, "start") as start, \
@@ -1642,7 +1642,7 @@ class TheKeeperWithTheLoop(unittest.TestCase):
             # One turn ends where the keeper waits: for the stops' loop's next step with the loop, in its sleep without.
             with self.assertRaises(Out):
                 sk.main(list(argv))
-        self.fed = fed
+        self.fed, self.fast = fed, fast
         return k, build, start, alive
 
     def test_by_default_the_loop_starts_and_inline_is_the_keeper_as_it_was(self):
@@ -1664,6 +1664,14 @@ class TheKeeperWithTheLoop(unittest.TestCase):
         self.assertIsNone(build.call_args[1]["wallet"], "a dry run hands the loop no key")
         start.assert_called_once()
         alive.assert_called_once()
+        # One look at the head and one read of the logs for both loops: the loop is told to hand its steps on, and the
+        # keeper waits for them; it makes no fast step of its own look.
+        build.return_value.share.assert_called_once_with()
+        self.fed.assert_called_once()
+        self.fast.assert_not_called()
+        k, build, start, alive = self.main({"COLOSSEUM_STOPS": "inline"})
+        self.fed.assert_not_called()
+        self.fast.assert_called_once()
 
     def test_without_it_as_before(self):
         k = self.keeper()
@@ -1734,6 +1742,8 @@ class TheOneCall(Base):
             self.run_to(loop, 103)
             journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
             self.assertEqual(journal.px[BTC], lines, how)
+            self.assertEqual(journal.times, {b: self.node.time_of(b) for b in lines}, "each line's time by its own call")
+            self.assertEqual({m for m, _ in self.node.calls}, {"eth_call", "eth_getLogs"}, "no block asked for apart")
             self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 3)], how)
             gaps = [(lo, hi) for lo, hi, _ in journal.gaps]
             self.assertEqual(gaps, [] if how == "honest" else [(101, 101), (102, 102)], how)
@@ -1847,6 +1857,21 @@ class TheOneCall(Base):
         before = len(self.node.calls)
         self.run_to(loop, 102)
         self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call", "eth_getLogs"])
+        self.node.batch_fails = 1
+        before = len(self.node.calls)
+        self.run_to(loop, 102)
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call", "eth_getBlockByNumber"],
+                         "a head already looked at: no price is asked for")
+
+    def test_a_block_not_read_back_counts_as_a_block_with_no_price(self):
+        """A node that answers no block by its number, and looks that miss every other block: half the blocks are
+        gaps. That is an alarm too, with no stop standing: the journal has no price for them."""
+        loop = self.loop(wallet=None)
+        self.node.ignores_tag = True
+        self.run_to(loop, *range(100, 100 + 2 * sf.UNPRICED_MIN, 2))
+        said = self.events("stop_prices_unread")
+        self.assertEqual([(a["blocks"], a["without"]) for a in said], [(sf.UNPRICED_MIN, sf.UNPRICED_MIN // 2 - 1 + 1)])
+        self.assertEqual(self.events("stop_read_back_gap"), [])
 
     def test_a_busy_node_is_not_asked_the_old_way(self):
         loop = self.loop(wallet=None)
@@ -2036,12 +2061,17 @@ class LinesWithNoPrice(Base):
         self.assertEqual(self.events("stop_prices_unread"), [], "ten of a hundred: a tenth, not more")
         self.run_to(loop, 200)
         self.assertEqual(self.events("stop_prices_unread")[0]["without"], 11)
-        # Ten minutes on, the lines of before are out of the count: a journal that reads again is not held to them.
-        self.node.unread_assets = set()
-        loop.unpriced_said_at = None
-        self.later = sf.UNPRICED_WINDOW_S + 1
-        self.run_to(loop, *range(201, 260))
-        self.assertEqual(len(self.events("stop_prices_unread")), 1)
+        # Ten minutes on, the lines of before are out of the count, the good ones too: twenty with a price and ten
+        # without are a third of the last ten minutes, whatever the two hundred before them were.
+        self.node = Node()
+        self.said.clear()
+        loop = self.loop(wallet=None)
+        self.run_to(loop, *range(100, 300))
+        self.later = sf.UNPRICED_WINDOW_S + 300
+        self.run_to(loop, *range(300, 320))
+        self.node.unread_assets = {0, 3, 4}
+        self.run_to(loop, *range(320, 330))
+        self.assertEqual([(a["blocks"], a["without"]) for a in self.events("stop_prices_unread")], [(30, 10)])
 
     def test_one_asset_read_is_a_line_with_a_price(self):
         loop = self.loop(wallet=None)

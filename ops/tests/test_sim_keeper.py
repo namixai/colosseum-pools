@@ -759,6 +759,8 @@ class TheBatchedPass(unittest.TestCase):
             self.assertEqual([m for m, _ in chain.calls], ["eth_blockNumber"] + ["eth_call"] * len(chain.batches) + ["eth_getLogs"])
             counts[n] = len(chain.calls)
             self.assertEqual(sk.stop_loop.reread.call_count, 2 * n, "each exam's stops handed to the loop, each pass")
+            self.assertEqual(sk.reads.got, {}, "the batch is the pass's: nothing later is answered from it")
+        self.assertEqual(k.BATCH, 100)
         self.assertEqual(counts, {3: 3, 100: 19}, "three accounts in one call; a hundred in seventeen: six a call")
         # A pass every 30 seconds: a hundred more accounts are 32 more requests a minute, where they were 3 300.
         self.assertLessEqual(2 * (counts[100] - counts[3]), 40)
@@ -819,6 +821,8 @@ class TheBatchedPass(unittest.TestCase):
             sent, said = self.passes(sk, chain)
             outcomes[multicall] = (sent, sorted(sk.done), [e for e, _ in said if e != "pass_done"])
             self.assertEqual(bool(chain.batches), multicall)
+            if multicall:  # the day's first minutes: `day()` is in the batch with the rest
+                self.assertEqual([s for _, s in chain.alone if s != sel("rules()")], [], "no read asked alone")
         self.assertEqual(outcomes[True], outcomes[False])
         sent, done, _ = outcomes[True]
         self.assertEqual(sent, [(exams[0], "breach"), (exams[1], "expire"), (exams[2], "checkpoint"), (Chain.POOL, "release"),
@@ -960,6 +964,17 @@ class OneLookForBothLoops(unittest.TestCase):
             self.assertEqual(sk.fed_step(0.01), [], "not placed again by a block already read")
         rpc.assert_not_called()
         self.assertEqual((fill.call_count, sk.fast_block, sk.orders), (1, 12, {}))
+
+    def test_two_orders_of_one_exam_are_taken_in_the_chains_order(self):
+        sk = self.keeper()
+        sk.fast_block = 8
+        first = placed_log(self.EXAM, 10, 14, 9) | {"logIndex": "0x2"}
+        second = placed_log(self.EXAM, 20, 24, 9) | {"logIndex": "0x7"}
+        sk.stop_loop.feed.put((9, 9, [second, first]))  # as two reads of the node gave them, not in the block's order
+        with mock.patch.object(k.c, "rpc") as rpc:
+            sk.fed_step(0.01)
+        rpc.assert_not_called()
+        self.assertEqual(sk.orders, {self.EXAM: (20, 24)}, "the later order of the block is the one that waits")
 
     def test_an_account_sold_in_a_step_is_known_from_it(self):
         sk = self.keeper()
