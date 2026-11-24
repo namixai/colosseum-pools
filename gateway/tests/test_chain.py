@@ -93,13 +93,25 @@ class NoKeyOfTheNodeInALine(unittest.TestCase):
         short, long = "https://rpc.example.org", "https://rpc.example.org/SECRETKEY123"
         for gateway, index in ((short, long), (long, short)):
             with mock.patch.dict(os.environ, {"GATEWAY_RPC_URL": gateway, "SIM_INDEX_RPC_URL": index}):
-                got = chain.quiet(RuntimeError(f"both: {short} and {long}, twice {long}"), 400)
-                self.assertEqual(got, "both: <node> and <node>, twice <node>")
+                got = chain.quiet(RuntimeError(f"both: {short} and {long} and again {long}"), 400)
+                self.assertEqual(got, "both: <node> and <node> and again <node>")
         keyed = "https://SECRETKEY123.provider.example/v2"
         for name in chain.NODE_SETTINGS:
             with mock.patch.dict(os.environ, {name: keyed}):
                 got = chain.quiet(RuntimeError("Failed to resolve 'secretkey123.provider.example' ([Errno 8] nodename nor servname)"))
                 self.assertEqual(got, "Failed to resolve '<host>' ([Errno 8] nodename nor servname)", name)
+
+    def test_an_address_that_goes_on_past_a_configured_one_goes_whole(self):
+        """The address an error names may begin with a configured one and go on: the same node at a longer path, a
+        redirect, another node of the provider that is not among those configured. Taken out only as far as the
+        configured one reaches, it would leave "<node>/v2/KEY", a text no later rule knows for an address."""
+        for name in chain.NODE_SETTINGS:
+            with mock.patch.dict(os.environ, {name: "https://rpc.example.org"}):
+                for text, said in (("500 Server Error for url: https://rpc.example.org/v2/SECRETKEY123",
+                                    "500 Server Error for url: <node>"),
+                                   ("sent on to https://rpc.example.org/v2/SECRETKEY123?id=1 (twice)", "sent on to <node> (twice)"),
+                                   ("down: https://rpc.example.org", "down: <node>")):
+                    self.assertEqual(chain.quiet(RuntimeError(text)), said, name)
 
     def test_the_words_are_cut_after_the_address_is_gone_never_before(self):
         """Cut first, a host name that is the node's key stands there in part, `host='KEY.prov`, with no end for any

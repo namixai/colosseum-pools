@@ -88,6 +88,7 @@ RPC_GAP_S = 1.0
 
 # A URL in an error's text (requests writes the node's whole address, path and key with it), and urllib3's path after
 # "url: ": neither reaches a log line or a reason (review 9 of #336).
+_URL_REST = r"[^\s'\"<>()]*"  # what goes on in the same address: its path, its key
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
 _HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
 _URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
@@ -95,13 +96,14 @@ _URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
 
 def quiet(exc, limit: int | None = 200) -> str:
     """An exception's text with no node address in it, cut to `limit` (None: not cut) after the address is gone: a
-    node's URL may hold its key. The configured nodes' addresses are taken out as they are, the longest first (one that
-    begins another would leave the other's end, its key, behind), then any other URL, then a bare path."""
+    node's URL may hold its key. The configured nodes' addresses are taken out first, the longest first, each with
+    whatever goes on after it in the same address (an address that begins with a configured one and goes on into a
+    path would leave that end, its key, behind), then any other URL, then a bare path."""
     text = str(exc)
     urls = [u for u in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"),
                         os.environ.get("COLOSSEUM_RPC_BACKUP_URL")) if u]
     for url in sorted(set(urls), key=len, reverse=True):
-        text = text.replace(url, "<node>")
+        text = re.sub(re.escape(url) + _URL_REST, "<node>", text)
     text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
     # A key may be the node's host name itself (KEY.provider.example): urllib3 writes it as host='…' and in its
     # resolver's words; the configured nodes' host names go wherever they stand (review 12 of #336).

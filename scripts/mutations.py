@@ -17337,11 +17337,14 @@ MUTATIONS = [
      "        for asset in sorted({s[\"asset\"] for s in spans} - {w[0] for w in want}):",
      "        for asset in ():",
      ["test_every_asset_with_a_stop_has_a_block_the_node_bore_out_or_the_journal_is_doubted"]),
-    # No key of the node in a line: the longest configured address first; a refusal cleaned before it is cut.
+    # No key of the node in a line: a configured address goes with whatever goes on after it in the same address
+    # (re-aimed 24 Nov 2026: the line took a configured address out as it stood, the longest first, and one that went
+    # on past it left its end; with the rest taken too, the order no longer decides it); a refusal cleaned before it
+    # is cut.
     ("SC43", "ops/sim_check.py",
+     "    for url in sorted(set(urls), key=len, reverse=True):\n        text = re.sub(re.escape(url) + _URL_REST, \"<node>\", text)",
      "    for url in sorted(set(urls), key=len, reverse=True):\n        text = text.replace(url, \"<node>\")",
-     "    for url in sorted(set(urls), key=len):\n        text = text.replace(url, \"<node>\")",
-     ["test_one_configured_address_that_begins_another_leaves_none_of_the_others_key"]),
+     ["test_an_address_that_goes_on_past_a_configured_one_goes_whole"]),
     ("SC44", "ops/sim_check.py",
      "error=refusal(Exception(quiet(exc, None))))",
      "error=quiet(refusal(exc)))",
@@ -17597,9 +17600,9 @@ MUTATIONS = [
      "log_line(event=\"protect_take_on_retry\", error=f\"{type(exc).__name__}: {str(exc)[:200]}\", wait_s=delay)",
      ["test_the_log_keeps_the_words_of_a_failed_reading_without_the_nodes_address"]),
     ("G422", "gateway/chain.py",
+     "    for url in sorted(set(urls), key=len, reverse=True):\n        text = re.sub(re.escape(url) + _URL_REST, \"<node>\", text)",
      "    for url in sorted(set(urls), key=len, reverse=True):\n        text = text.replace(url, \"<node>\")",
-     "    for url in sorted(set(urls), key=len):\n        text = text.replace(url, \"<node>\")",
-     ["test_the_configured_nodes_go_whole_the_longest_first_and_their_host_names_wherever_they_stand"]),
+     ["test_an_address_that_goes_on_past_a_configured_one_goes_whole"]),
     ("G423", "gateway/chain.py",
      "    text = str(exc)\n    urls = [u for u in (*(os.environ.get(k) for k in NODE_SETTINGS), NETWORK.rpc_url) if u]",
      "    text = str(exc)[:limit]\n    urls = [u for u in (*(os.environ.get(k) for k in NODE_SETTINGS), NETWORK.rpc_url) if u]",

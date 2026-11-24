@@ -581,6 +581,13 @@ class NoKeyOfTheNodeInALine(unittest.TestCase):
         self.assertNotIn("SECRETKEY123", json.dumps(lines))
         self.assertNotIn("rpc.example.org", json.dumps(lines))
 
+    def test_an_address_that_goes_on_past_the_configured_one_is_not_left_in_part(self):
+        import os
+        base = "https://rpc.example.org/v2"
+        with mock.patch.object(k.c, "RPC_URL", base), mock.patch.dict(os.environ, {"COLOSSEUM_RPC_URL": base}):
+            said = k.refused(RuntimeError(f"403 Client Error: Forbidden for url: {base}/SECRETKEY123"))
+        self.assertEqual(said, "403 Client Error: Forbidden for url: <node>")
+
     def test_the_address_goes_out_of_the_whole_text_before_it_is_cut_and_a_refusal_keeps_its_name(self):
         """`refusal` cuts the node's words to 200. Cut first, a host name that is the node's key stands there in part,
         `host='KEY.prov`, with no end for any rule to know it by. And what the contract itself refused with is still
