@@ -8,7 +8,7 @@
 # ops/host/install.sh installs it and enables it for an instance whose record is a simulated pool's (docs/HOSTING.md,
 # "A simulated pool's checker"); for any other instance it is never started.
 [Unit]
-Description=colosseum-pools simulated pool checker %i (HyperEVM testnet)
+Description=colosseum-pools simulated pool checker %i
 After=network-online.target
 Wants=network-online.target
 

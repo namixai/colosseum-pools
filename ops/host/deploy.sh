@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Puts one commit of this repository on the pools host and switches to it. Testnet only.
+# Puts one commit of this repository on the pools host and switches to it. The host's network is the host's own
+# setting, /etc/colosseum/host.env, read there by install.sh: nothing here names one (docs/HOSTING.md).
 #
 #   COLOSSEUM_SSH_KEY=<key file> ops/host/deploy.sh <commit> <user@host>
 #

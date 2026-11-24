@@ -27,13 +27,41 @@
 # with the factory's checker. It makes the keeper's directories and writes, when missing, deployment-<name> and
 # keeper-<name>.env; never gateway-<name>.env, whose absence is how ops/host_instances.py and install.sh know the
 # instance has no gateway.
+#
+#   ops/host/bootstrap.sh --network <testnet|mainnet>
+#
+# names the one network this host serves, in /etc/colosseum/host.env, and sets the host up for it. One host serves one
+# network: a host without the file is a testnet host, as every host was before it, and the file once written is never
+# changed here. A mainnet host gets none of testnet's settings (gateway.env, keeper.env, shared-keeper.env) and no
+# instance but one simulated pool's, whose keeper-<name>.env is written for mainnet, with the lines a person adds by
+# hand named in it, and whose index's settings, sim-index-<name>.env, beside it (docs/HOSTING.md, "Mainnet").
 set -euo pipefail
 
 say() { printf 'bootstrap: %s\n' "$*"; }
 
+# The host's network as ops/host_instances.py reads it (`host_network`; a test holds the two to the same files): one
+# line of its own in host.env, COLOSSEUM_NETWORK=testnet or COLOSSEUM_NETWORK=mainnet, comment lines apart; no file,
+# testnet.
+host_env=/etc/colosseum/host.env
+host_network() {
+  local lines
+  [ -e "$host_env" ] || { echo testnet; return 0; }
+  lines="$(grep -v '^[[:space:]]*#' "$host_env" | grep -v '^[[:space:]]*$' || true)"
+  case "$lines" in
+    COLOSSEUM_NETWORK=testnet) echo testnet ;;
+    COLOSSEUM_NETWORK=mainnet) echo mainnet ;;
+    *) return 1 ;;
+  esac
+}
+
 instance=""
 sim=""
-if [ "${1:-}" = "--sim-instance" ]; then
+want_network=""
+if [ "${1:-}" = "--network" ]; then
+  [ $# -eq 2 ] && { [ "$2" = testnet ] || [ "$2" = mainnet ]; } \
+    || { echo "bootstrap: usage: bootstrap.sh --network <testnet|mainnet>" >&2; exit 2; }
+  want_network="$2"
+elif [ "${1:-}" = "--sim-instance" ]; then
   [ $# -eq 3 ] || { echo "bootstrap: usage: bootstrap.sh --sim-instance <name> <label> (no port: no gateway)" >&2; exit 2; }
   instance="$2"
   instance_label="$3"
@@ -47,7 +75,7 @@ elif [ "${1:-}" = "--instance" ]; then
   [[ "$instance_port" =~ ^[0-9]+$ ]] && [ "$instance_port" -ge 8788 ] && [ "$instance_port" -le 8799 ] \
     || { echo "bootstrap: an instance's port is 8788..8799 (8787 is the first gateway's)" >&2; exit 2; }
 elif [ $# -gt 0 ]; then
-  echo "bootstrap: usage: bootstrap.sh [--instance <name> <label> <port> | --sim-instance <name> <label>]" >&2
+  echo "bootstrap: usage: bootstrap.sh [--network <testnet|mainnet> | --instance <name> <label> <port> | --sim-instance <name> <label>]" >&2
   exit 2
 fi
 if [ -n "$instance" ]; then
@@ -55,6 +83,34 @@ if [ -n "$instance" ]; then
   [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
     || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
   [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
+fi
+
+# One host, one network: read before anything is installed or made, and what is asked for the other one is refused
+# here.
+network="$(host_network)" \
+  || { echo "bootstrap: $host_env names the host's network on one line of its own, COLOSSEUM_NETWORK=testnet or COLOSSEUM_NETWORK=mainnet, and nothing else" >&2; exit 2; }
+if [ -n "$want_network" ] && [ "$want_network" != "$network" ]; then
+  if [ -e "$host_env" ]; then
+    echo "bootstrap: this host serves $network ($host_env): one host serves one network, and the file is never changed here" >&2
+    exit 2
+  fi
+  # A host that served testnet is no mainnet host while anything of testnet's is still named on it.
+  for left in /etc/colosseum/deployment /etc/colosseum/deployment-* /etc/colosseum/shared-keeper.env; do
+    [ ! -e "$left" ] \
+      || { echo "bootstrap: $left is here: this host serves testnet's deployments. Take them off first (docs/HOSTING.md, \"Mainnet\"): one host serves one network" >&2; exit 2; }
+  done
+  network="$want_network"
+fi
+if [ "$network" = mainnet ] && [ -n "$instance" ]; then
+  [ -n "$sim" ] \
+    || { echo "bootstrap: this is a mainnet host ($host_env): it serves one simulated pool's instance (--sim-instance), never an exchange's" >&2; exit 2; }
+  for other in /etc/colosseum/deployment-*; do
+    case "$other" in
+      *.env | *.next | *.previous | "/etc/colosseum/deployment-$instance" | "/etc/colosseum/deployment-*") continue ;;
+    esac
+    echo "bootstrap: this is a mainnet host ($host_env) and $other names an instance already: it serves one, as one user (docs/HOSTING.md, \"Mainnet\")" >&2
+    exit 2
+  done
 fi
 
 # Amazon Linux 2023: its python3 is 3.9, and CI tests on 3.12.
@@ -77,13 +133,31 @@ for user in colosseum-gw colosseum-keeper; do
 done
 
 install -d -m 0700 -o colosseum-gw -g colosseum-gw /var/lib/colosseum-gw
-install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper
+# The keeper's own directory: its user's alone, as before. Where the group already passes through it (mode 0710: set
+# below for a mainnet instance's index, and by ops/host/second-prices.sh for the second journal's user), that is kept,
+# so that a later run does not shut them out again. The group only passes: it lists nothing here, and every key
+# directory under it stays 0700.
+keeper_mode=0700
+[ "$(stat -c '%a' /var/lib/colosseum-keeper 2>/dev/null || true)" != 710 ] || keeper_mode=0710
+install -d -m "$keeper_mode" -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper
 install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper/secrets
 install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper/shared \
   /var/lib/colosseum-keeper/shared/secrets
 install -d -m 0755 -o root -g root /opt/colosseum-pools /opt/colosseum-pools/releases /etc/colosseum
 install -d -m 0700 -o root -g root /etc/colosseum/tls
 
+# The host's one network, written once: install.sh reads it at every release (ops/host_instances.py).
+if [ -n "$want_network" ] && [ ! -e "$host_env" ]; then
+  printf '%s\n' "# The one network this host serves (docs/HOSTING.md). Written once by bootstrap.sh --network." \
+    "COLOSSEUM_NETWORK=$network" | install -m 0644 -o root -g root /dev/stdin "$host_env"
+  say "wrote $host_env: this host serves $network"
+else
+  say "this host serves $network"
+fi
+
+# The three settings files below are testnet's: the first gateway's, the first keeper's and the shared pools' keeper's.
+# A mainnet host gets none of them (down to the `fi` that says so): it has no gateway and no exchange's keeper.
+if [ "$network" = testnet ]; then
 # The gateway and the keeper deliberately use DIFFERENT nodes. Both rate-limit per IP, and
 # this host is one IP: while they shared a node, anyone outside could spend the keeper's budget
 # by calling the public gateway, which costs five chain reads per request before it refuses.
@@ -138,6 +212,7 @@ COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm
 EOF
   say "wrote /etc/colosseum/shared-keeper.env"
 fi
+fi  # testnet's three settings files
 
 tls=/etc/colosseum/tls
 if [ ! -f "$tls/origin.key" ]; then
@@ -198,6 +273,44 @@ GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8"}
 GATEWAY_PERP_DEXES=xyz
 EOF
   say "wrote /etc/colosseum/gateway-$instance.env"
+fi
+
+# A mainnet host's one instance, a simulated pool's (checked at the top). Its keeper's settings name the network, and in
+# comments the lines a person writes by hand before the release with its record: the confirmation, without which its
+# services send nothing on mainnet (ops/sim_network.py) and install.sh switches to nothing, and the host's own nodes,
+# which no public record holds. Root's alone, mode 0600: it will hold a node's key. Its index's settings beside it.
+# And the keeper's directory lets its group pass, for the index (colosseum-sim-index@, which reads the review's folder
+# and the time of the journal's day file as that group) and for the second journal's user.
+if [ "$network" = mainnet ]; then
+  key_dir="/var/lib/colosseum-keeper/instances/$instance/secrets"
+  if [ ! -f "/etc/colosseum/keeper-$instance.env" ]; then
+    printf '%s\n' "COLOSSEUM_KEY_DIR=$key_dir" \
+      "COLOSSEUM_NETWORK=mainnet" \
+      "# By hand, each on a line of its own, before the release that carries the record (docs/HOSTING.md, \"Mainnet\"):" \
+      "#   COLOSSEUM_CONFIRM_MAINNET=$instance_label     the deployment's label: nothing is sent on mainnet without it" \
+      "#   COLOSSEUM_HOST_RPC_URL=<this host's own node>   the keeper's: read here only, it wins over the record's public one" \
+      "#   COLOSSEUM_STOP_RPC_URL=<a node for the stops>   the stops' loop's and the key's transactions; the keeper's when not set" \
+      "#   COLOSSEUM_ARCHIVE_RPC_URL=<a node that answers for old blocks>   optional: the review's third check" \
+      | install -m 0600 -o root -g root /dev/stdin "/etc/colosseum/keeper-$instance.env"
+    say "wrote /etc/colosseum/keeper-$instance.env for mainnet (mode 0600)"
+  fi
+  if [ ! -f "/etc/colosseum/sim-index-$instance.env" ]; then
+    printf '%s\n' "COLOSSEUM_NETWORK=mainnet" \
+      "SIM_INDEX_RECORD=deployments/mainnet-$instance_label.json" \
+      "# By hand, each on a line of its own, before the index is enabled (docs/GATEWAY.md, \"The index of a simulated pool\"):" \
+      "#   SIM_INDEX_ALLOW_ORIGIN=<the site's origin>   the page that reads the index" \
+      "#   SIM_INDEX_RPC_URL=<a node of the index's own>   optional: the network's public node when not set" \
+      | install -m 0600 -o root -g root /dev/stdin "/etc/colosseum/sim-index-$instance.env"
+    say "wrote /etc/colosseum/sim-index-$instance.env for mainnet (mode 0600)"
+  fi
+  chmod 0710 /var/lib/colosseum-keeper
+  say "instance $instance: a simulated pool's on mainnet, no gateway. Next, by hand (docs/HOSTING.md, \"Mainnet\"):"
+  say "  1. the filler's and the checker's wallets, filler.key/.addr and checker.key/.addr, in $key_dir"
+  say "  2. in /etc/colosseum/keeper-$instance.env: COLOSSEUM_CONFIRM_MAINNET=$instance_label and the host's own nodes"
+  say "  3. in /etc/colosseum/watch.env: COLOSSEUM_ALERT_CMD, the alarm channel; nothing starts on mainnet without it"
+  say "  4. deploy the release with the record: install.sh checks all of it, then enables colosseum-multi-keeper@$instance"
+  say "     and colosseum-sim-checker@$instance"
+  exit 0
 fi
 
 # Its keeper sends with its own key, from its own directory: two keepers on one key would race for

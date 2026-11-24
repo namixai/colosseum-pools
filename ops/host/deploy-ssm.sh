@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Puts one commit of this repository on the pools host through AWS Systems Manager: no ssh, and no
-# address of the host anywhere. Testnet only.
+# address of the host anywhere. The host's network is the host's own setting
+# (/etc/colosseum/host.env, read by install.sh).
 #
 # Not usable on the pools host yet: on 5 November 2026 the instance has no role, its SSM agent is not
 # registered and there is no bucket. Until that is set up, releases go through ops/host/deploy.sh.

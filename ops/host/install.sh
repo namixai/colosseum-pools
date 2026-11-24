@@ -17,11 +17,17 @@
 #   7. an instance whose record names a MultiPool has its keeper enabled, colosseum-multi-keeper@<name>
 #      (ops/multi_keeper.py), and the watchdog on it;
 #   8. a simulated pool's instance (a SimPoolFactory, no PoolFactory) has no gateway, no instance keeper and no
-#      nginx route: only colosseum-multi-keeper@<name>, with the factory's filler, and colosseum-sim-checker@<name>,
-#      with its checker (ops/sim_check.py), both wallets checked first.
+#      nginx route of its own: only colosseum-multi-keeper@<name>, with the factory's filler, and
+#      colosseum-sim-checker@<name>, with its checker (ops/sim_check.py), both wallets checked first. Its index
+#      (colosseum-sim-index@<name>, enabled by hand) is reached at /v1/simindex/ on nginx.
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
-# its gateway, and nothing else. Testnet only.
+# its gateway, and nothing else.
+#
+# One host serves one network, the one /etc/colosseum/host.env names (`bootstrap.sh --network`; testnet when there is
+# no such file): every record is read for that network, and whatever on the host belongs to the other stops the
+# release before anything is switched. A mainnet host serves one simulated pool's instance and none of testnet's
+# services (ops/host_instances.py, docs/HOSTING.md "Mainnet").
 set -euo pipefail
 
 sha="${1:?usage: install.sh <full commit sha>}"
@@ -73,8 +79,17 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-index@.service" /et
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
 systemctl daemon-reload
 
+# The host's one network, read once (/etc/colosseum/host.env, by ops/host_instances.py; testnet when there is no such
+# file) and exported: every record below is read for it, and nothing here names a network a second time.
+network="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances network /etc/colosseum)" \
+  || fail "/etc/colosseum/host.env does not name the host's network as ops/host_instances.py reads it; nothing switched"
+[ "$network" = testnet ] || [ "$network" = mainnet ] || fail "odd network for this host: $network; nothing switched"
+export COLOSSEUM_NETWORK="$network"
+say "this host serves $network"
+
 # The further instances, read once: a file that names one badly stops the release here, before nginx
-# or any unit is touched.
+# or any unit is touched. So does anything of the other network, and on a mainnet host anything but its one
+# simulated pool's instance.
 instances="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances list /etc/colosseum)" \
   || fail "the instances in /etc/colosseum are not as ops/host_instances.py reads them; nothing switched"
 locations="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances nginx /etc/colosseum)" \
@@ -91,8 +106,18 @@ if [ -f /etc/colosseum/deployment ]; then
 fi
 for label in $first_label $(awk '{print $2}' <<< "$instances"); do
   (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$label") > /dev/null \
-    || fail "deployment $label: no complete testnet record in this release; nothing switched"
+    || fail "deployment $label: no complete $network record in this release; nothing switched"
 done
+
+# A mainnet host runs none of testnet's services. Its one instance is a simulated pool's (ops/host_instances.py
+# refused anything else just above); what an earlier use of the host left enabled would be restarted below on this
+# release, as a testnet service beside mainnet's keys.
+if [ "$network" = mainnet ]; then
+  for unit in colosseum-gateway colosseum-keeper colosseum-shared-keeper; do
+    ! systemctl is-enabled --quiet "$unit" 2>/dev/null \
+      || fail "this is a mainnet host and $unit is enabled: testnet's services are taken off the host first (docs/HOSTING.md, \"Mainnet\"); nothing switched"
+  done
+fi
 
 # A deployment whose record names a test publisher, a key in a file before the enclave (ops/key_relay.py), is
 # served as an instance: its keeper signs bindings with the publisher's wallet, kept beside its own, and makes
@@ -187,6 +212,7 @@ done <<< "$instances"
 # around "=", quotes, a comment after the value, a space inside the label, an empty value, the line
 # commented out, written twice, or not there at all -- stops the release with the lines it read, rather
 # than checking a label systemd would not pass.
+# Testnet's alone: a mainnet host with the file was refused where the instances were read.
 shared_env=/etc/colosseum/shared-keeper.env
 if [ -f "$shared_env" ]; then
   shared_lines="$(grep -n 'COLOSSEUM_SHARED_DEPLOYMENT' "$shared_env" || true)"
@@ -226,7 +252,7 @@ fi
 deployment_env() {  # <label> <env file>
   if ! (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$1") > "$2.next"; then
     rm -f "$2.next"
-    fail "deployment $1: no complete testnet record in this release"
+    fail "deployment $1: no complete $network record in this release"
   fi
   chmod 0644 "$2.next"
   mv "$2.next" "$2"

@@ -25,13 +25,19 @@ factory's filler as its wallet; the checker's wallet is kept beside it.
     python -m ops.host_instances multi <label>                   what its multi keeper keeps (a MultiPool or a SimPoolFactory), or an empty line
     python -m ops.host_instances multi-pool <label>              its MultiPool, which has a watchdog, or an empty line
     python -m ops.host_instances sim-wallets <label>             a simulated pool's wallets, "<name> <address>" a line
+    python -m ops.host_instances network /etc/colosseum          the one network this host serves: testnet or mainnet
 
-Testnet only, as the host is.
+One host serves one network. /etc/colosseum/host.env names it on one line, COLOSSEUM_NETWORK=testnet or
+COLOSSEUM_NETWORK=mainnet (`bootstrap.sh --network`); a host without the file is a testnet host, as every host was
+before it. install.sh reads it here (`network`) and exports it, so every record below is read for that network
+(ops/deployments.py), and whatever on the host belongs to the other network stops the release (`one_network`). A
+mainnet host serves one simulated pool's instance and nothing of testnet's (`mainnet_host`).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import sys
@@ -39,6 +45,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from ops import deployments
+from spike.hlspike import network as networks
 
 # A name is a path segment of the API and part of a unit's name: short, lower-case, and never "v1",
 # which the first gateway's own paths begin with.
@@ -84,6 +91,120 @@ def gateway_port(etc: pathlib.Path, name: str, label: str) -> int | None:
     return bind_port(env)
 
 
+# The host's own settings file: the one place that names the network the host serves.
+HOST_ENV = "host.env"
+HOST_NETWORK_LINE = re.compile(rf"{networks.ENV}=({'|'.join(networks.NETWORKS)})")
+
+
+def host_network(etc: pathlib.Path) -> networks.Network:
+    """The one network this host serves, from <etc>/host.env: one line of its own, COLOSSEUM_NETWORK=testnet or
+    COLOSSEUM_NETWORK=mainnet (comment lines apart), written by `bootstrap.sh --network`. No file: testnet, as every
+    host set up before the file. Anything else in it stops the release: a network read out of half a line would be a
+    network chosen for the operator."""
+    f = etc / HOST_ENV
+    if not f.exists():
+        return networks.NETWORKS[networks.DEFAULT]
+    try:
+        lines = [l for l in f.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    except OSError as exc:
+        raise SystemExit(f"{f}: {exc.strerror}; it names the host's network") from None
+    named = HOST_NETWORK_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    if not named:
+        raise SystemExit(f"{f} names the host's network on one line of its own, {networks.ENV}=testnet or "
+                         f"{networks.ENV}=mainnet, and nothing else: no space, quote or second line")
+    return networks.NETWORKS[named.group(1)]
+
+
+def served(etc: pathlib.Path) -> networks.Network:
+    """The host's network, which the environment names too: the records are read for the network COLOSSEUM_NETWORK
+    selects (ops/deployments.py), so install.sh exports the host's before it reads one. The two apart would check
+    one network's records and serve the other's."""
+    net = host_network(etc)
+    selected = networks.select()
+    if selected.name != net.name:
+        raise SystemExit(f"this host serves {net.name} ({etc / HOST_ENV}; testnet when there is no such file), and "
+                         f"{networks.ENV} selects {selected.name}: one host serves one network; name the same in both")
+    return net
+
+
+def env_values(env: pathlib.Path, name: str) -> list[str]:
+    """Every value a settings file gives `name`, as systemd reads its lines: NAME=value, the value's quotes dropped.
+    [] for a file that is not there. Only these values leave the file: its other lines may hold a node's key."""
+    try:
+        lines = env.read_text().splitlines()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise SystemExit(f"{env}: {exc.strerror}") from None
+    out = []
+    for line in lines:
+        key, eq, value = line.partition("=")
+        if not eq or key.strip() != name:  # a line commented out names "#NAME", never NAME
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out.append(value)
+    return out
+
+
+def other_network(net: networks.Network) -> networks.Network:
+    return next(n for n in networks.NETWORKS.values() if n.name != net.name)
+
+
+def of_this_network(etc: pathlib.Path, net: networks.Network, label: str, named_by: pathlib.Path) -> None:
+    """A deployment named on this host is one of the host's network: a label whose only record is the other network's
+    is refused in those words, before anything reads it as a record that is merely missing."""
+    other = other_network(net)
+    if not deployments.record_path(label, net).exists() and deployments.record_path(label, other).exists():
+        raise SystemExit(f"{named_by} names {label}, a {other.name} deployment, and this host serves {net.name} "
+                         f"({etc / HOST_ENV}; testnet when there is no such file): one host serves one network. Take "
+                         f"it off this host, or serve it from a {other.name} host")
+
+
+def one_network(etc: pathlib.Path, net: networks.Network) -> None:
+    """No settings file of the host names another network than the host's: a unit reads COLOSSEUM_NETWORK from its own
+    file (keeper-<name>.env, sim-index-<name>.env), and one naming the other network would start on it, beside what
+    this release checked for the host's. An empty value is testnet, as the units read it."""
+    for env in sorted(etc.glob("*.env")):
+        if env.name == HOST_ENV:
+            continue
+        if any((value or networks.DEFAULT) != net.name for value in env_values(env, networks.ENV)):
+            raise SystemExit(f"{env} names another network than this host's, {net.name} ({etc / HOST_ENV}; testnet "
+                             f"when there is no such file): one host serves one network")
+
+
+# What a mainnet host's one instance says in its own file, each once, before a release switches to it.
+CONFIRM = "COLOSSEUM_CONFIRM_MAINNET"
+
+
+def mainnet_host(etc: pathlib.Path, found: list[Instance], first: str) -> None:
+    """A mainnet host serves one simulated pool's instance, as colosseum-keeper, and nothing else: every instance on a
+    host runs as that one user, which on testnet is accepted and on mainnet is not, and testnet's deployments are taken
+    off the host before (docs/HOSTING.md, "Mainnet"). The instance's own file names the network and, written by hand,
+    the confirmation its services send nothing without (ops/sim_network.py): checked here, or the units would start,
+    refuse and restart for ever."""
+    if first or (etc / "deployment.env").exists():
+        raise SystemExit(f"this is a mainnet host ({etc / HOST_ENV}) and {etc}/deployment or deployment.env is here: a "
+                         "first deployment has a gateway and an exchange's keeper, testnet's; a mainnet host serves "
+                         "one simulated pool's instance and nothing else (docs/HOSTING.md, \"Mainnet\")")
+    if (etc / "shared-keeper.env").exists():
+        raise SystemExit(f"this is a mainnet host ({etc / HOST_ENV}) and {etc}/shared-keeper.env is here: the shared "
+                         "pool's keeper is testnet's; take it off the host first (docs/HOSTING.md, \"Mainnet\")")
+    if len(found) > 1 or any(i.port is not None for i in found):
+        raise SystemExit(f"this is a mainnet host ({etc / HOST_ENV}): it serves one simulated pool's instance "
+                         f"(bootstrap.sh --sim-instance) and nothing else, and {etc} names "
+                         f"{', '.join(i.name for i in found)}: all of a host's instances run as one user, which "
+                         "mainnet does not accept (docs/HOSTING.md, \"Mainnet\")")
+    for i in found:
+        env = etc / f"keeper-{i.name}.env"
+        if env_values(env, networks.ENV) != ["mainnet"] or env_values(env, CONFIRM) != [i.label]:
+            raise SystemExit(f"{env}: on a mainnet host the instance's own file says, each once on a line of its own, "
+                             f"{networks.ENV}=mainnet and, written by hand, {CONFIRM}={i.label} (its deployment's "
+                             "label): without both its services send nothing on mainnet, and would start, refuse and "
+                             "restart for ever (docs/HOSTING.md, \"Mainnet\")")
+
+
 def first_label(etc: pathlib.Path) -> str:
     """The first deployment's label as install.sh serves it: /etc/colosseum/deployment with every
     space taken out, "de mo2" as "demo2"; "" when there is no such file. install.sh reads it here, so
@@ -96,7 +217,9 @@ def instances(etc: pathlib.Path) -> list[Instance]:
     """Every further instance named in `etc`, by name. A file that names one badly stops it all: a
     half-read list would leave an instance unrouted, or routed to another's gateway. No deployment is
     served twice, the first's included: two keepers on one label would share its state file,
-    /var/lib/colosseum-keeper/keeper-<label>.json."""
+    /var/lib/colosseum-keeper/keeper-<label>.json. All of it on the host's one network (`served`, `one_network`), and on
+    a mainnet host one simulated pool's instance alone (`mainnet_host`)."""
+    net = served(etc)
     out = []
     for f in sorted(etc.glob("deployment-*")):
         if f.suffix in (".env", ".next", ".previous") or f.name.endswith(".env.next"):
@@ -107,6 +230,7 @@ def instances(etc: pathlib.Path) -> list[Instance]:
         label = f.read_text().strip()
         if not LABEL.fullmatch(label):
             raise SystemExit(f"{f}: odd label {label!r}")
+        of_this_network(etc, net, label, f)
         out.append(Instance(name, label, gateway_port(etc, name, label)))
     ports = [i.port for i in out if i.port is not None]
     if len(set(ports)) != len(ports):
@@ -115,8 +239,12 @@ def instances(etc: pathlib.Path) -> list[Instance]:
     first = first_label(etc)
     if first:
         labels.append(first)
+        of_this_network(etc, net, first, etc / "deployment")
     if len(set(labels)) != len(labels):
         raise SystemExit(f"one deployment is served twice (the first's label included): {sorted(labels)}")
+    one_network(etc, net)
+    if net.is_mainnet:
+        mainnet_host(etc, out, first)
     return out
 
 
@@ -378,6 +506,14 @@ def keys_contract(record: dict) -> str:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[0] == "network":
+        print(host_network(pathlib.Path(argv[1])).name)
+        return 0
+    if len(argv) == 2 and argv[0] in ("list", "nginx", "nginx-upstreams") and not os.environ.get(networks.ENV):
+        # Run by hand with no network named: the host's own. install.sh exports it; one named otherwise is refused.
+        own = host_network(pathlib.Path(argv[1])).name
+        if own != networks.DEFAULT:
+            os.environ[networks.ENV] = own
     if len(argv) == 2 and argv[0] == "list":
         for i in instances(pathlib.Path(argv[1])):
             print(f"{i.name} {i.label} {'-' if i.port is None else i.port}")
