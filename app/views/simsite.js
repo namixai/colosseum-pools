@@ -8,11 +8,17 @@ import { networkName } from "../lib/network.js";
 
 const { ethers } = window;
 
+// The pools the factory has named so far, as last read. Its list only grows (SimPoolFactory keeps every pool it
+// made), so a pool it named once is the site's for good and is not asked for again; an address it has not named is
+// asked of the chain each time, since the pool may have been opened since.
+let named = [];
+
 /** The pools of the site's factory as the chain has them now, oldest first; null when no contract stands at the
  *  factory's address. Any other failure of the read is thrown: a list that was not read is not an empty one. */
 export async function sitePools() {
   try {
-    return [...(await new ethers.Contract(simSite().factory, SIM_FACTORY_ABI, chain.readProvider).pools())];
+    named = [...(await new ethers.Contract(simSite().factory, SIM_FACTORY_ABI, chain.readProvider).pools())];
+    return named;
   } catch (err) {
     if (noContract(err)) return null;
     throw err;
@@ -31,7 +37,7 @@ export async function simListView(page) {
  */
 export async function sitePool(pool, page) {
   if (!simSite()) return true;
-  if (isSitePool(await sitePools(), pool)) return true;
+  if (isSitePool(named, pool) || isSitePool(await sitePools(), pool)) return true;
   // The router set the panel's marker for the address: this is no panel's page.
   if (page.isConnected) delete document.body.dataset.panel;
   render(page, NOT_FOUND);

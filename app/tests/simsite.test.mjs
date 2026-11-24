@@ -25,6 +25,7 @@ after(() => built.remove());
 test("testnet's site names no factory of simulation pools; a mainnet site names one, and no other deployment", async () => {
   assert.equal(simSite(), null);
   assert.equal(simSite(CONFIG), null);
+  assert.equal(simSite(null), null);
   const { CONFIG: main } = await import(new URL(`file://${built.site}/config.js`).href);
   assert.deepEqual(simSite(main), { label: "sim-main", factory: SIM_FACTORY });
   const lib = await built.lib("simsite.js");
@@ -115,7 +116,14 @@ test("a page of a pool is drawn only for a pool of the site's factory; on a site
   for (const hash of ["#/", `#/exam/${POOL}`, "#/exam", `#/pool/${POOL}`, "#/sim", "#/manage"]) assert.equal(PANEL_POOL.exec(hash), null);
   const view = read("../views/simsite.js");
   const check = view.slice(view.indexOf("export async function sitePool("));
-  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+if \(!simSite\(\)\) return true;\s+if \(isSitePool\(await sitePools\(\), pool\)\) return true;/);
+  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+if \(!simSite\(\)\) return true;\s+if \(isSitePool\(named, pool\) \|\| isSitePool\(await sitePools\(\), pool\)\) return true;/);
+  // A pool the factory named once is not asked for again (its list only grows); the list kept is the chain's own, as last
+  // read, and an address it does not name is read for afresh, never taken from anything but the factory.
+  assert.match(view, /^let named = \[\];$/m);
+  assert.match(view, /named = \[\.\.\.\(await new ethers\.Contract\(simSite\(\)\.factory, SIM_FACTORY_ABI, chain\.readProvider\)\.pools\(\)\)\];\s+return named;/);
+  assert.equal([...view.matchAll(/\bnamed = /g)].length, 2, "the kept list is written where it is declared and where the factory is read, nowhere else");
+  assert.match(read("../../src/sim/SimPoolFactory.sol"), /_pools\.push\(pool\);/);
+  assert.equal([...read("../../src/sim/SimPoolFactory.sol").matchAll(/_pools\b/g)].length, 3, "the factory's list is declared, pushed to and returned: nothing takes a pool out of it");
   assert.match(check, /if \(page\.isConnected\) delete document\.body\.dataset\.panel;\s+render\(page, NOT_FOUND\);\s+return false;/, "the page is the site's own, not a panel's");
   // An exam's screen: its pool is asked of the exam and held to the factory's list before anything of the exam is read.
   const exam = read("../views/exam.js");

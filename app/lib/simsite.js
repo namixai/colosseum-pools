@@ -9,7 +9,7 @@ import { CONFIG } from "../config.js";
 import { esc, sameAddress } from "./ui.js";
 
 /** The factory whose pools the site shows (`{ label, factory }`), or null on a site whose settings name none. */
-export const simSite = (config = CONFIG) => config.sim ?? null;
+export const simSite = (config = CONFIG) => config?.sim ?? null;
 
 /** Whether `address` is one of `pools`, the factory's own list, case aside. A list that was not read (null: no
  *  contract stands at the factory's address) names no pool. */
