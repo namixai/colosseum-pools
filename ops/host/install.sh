@@ -118,10 +118,12 @@ if [ "$network" = mainnet ]; then
       || fail "this is a mainnet host and $unit is enabled: testnet's services are taken off the host first (docs/HOSTING.md, \"Mainnet\"); nothing switched"
   done
   # And by what systemd itself has, whether /etc/colosseum still names it or not: a unit of ours that is enabled (its
-  # link under a .wants directory) or running, and is not one of the host's one instance's own four, is testnet's left
-  # over: one disabled and never stopped, an instance whose file was moved away, a watchdog's timer. Nothing below
-  # would stop it, and it would go on beside mainnet's keys.
+  # link under a .wants directory, the one kept across starts or the one of this start alone, `enable --runtime`) or
+  # running, and is not one of the host's one instance's own four, is testnet's left over: one disabled and never
+  # stopped, an instance whose file was moved away, a watchdog's timer. Nothing below would stop it, and it would go on
+  # beside mainnet's keys. Without systemd's answer about what runs nothing is switched either.
   unit_dir=/etc/systemd/system
+  run_dir=/run/systemd/system
   own_names="$(awk '{print $1}' <<< "$instances")"
   ours() {  # <unit>: the host's one instance's keeper, checker, index or review, or the line said when one of them fails
     local n
@@ -134,8 +136,9 @@ if [ "$network" = mainnet ]; then
     case "$1" in colosseum-unit-failed@*) return 0 ;; esac
     return 1
   }
-  enabled="$(ls "$unit_dir"/*.wants/ 2>/dev/null | grep -E '^colosseum-.+\.(service|timer|path)$' || true)"
-  running="$(systemctl list-units --plain --no-legend --state=active,activating,reloading 'colosseum-*' 2>/dev/null | awk '{print $1}' || true)"
+  enabled="$(ls "$unit_dir"/*.wants/ "$run_dir"/*.wants/ 2>/dev/null | grep -E '^colosseum-.+\.(service|timer|path)$' || true)"
+  running="$(systemctl list-units --plain --no-legend --state=active,activating,reloading 'colosseum-*' | awk '{print $1}')" \
+    || fail "systemd did not say which of our units run (systemctl list-units): on a mainnet host nothing is switched without that answer"
   left=""
   for unit in $enabled $running; do
     ours "$unit" || case " $left " in *" $unit "*) ;; *) left+="$unit " ;; esac

@@ -303,28 +303,34 @@ class Install(unittest.TestCase):
                     self.assertIn(f"this is a mainnet host and {enabled} is enabled", out.stderr)
 
     def guard(self, block: str, network: str, is_enabled: str = "", wants: tuple = (), running: tuple = (),
-              instances: str = "sim1 sim1 -"):
+              instances: str = "sim1 sim1 -", runtime: tuple = (), list_fails: bool = False):
         """install.sh's own block on a directory standing for systemd's, with a systemctl that answers as the test says:
-        `wants` are the units enabled (their links under a .wants directory), `running` the ones list-units names."""
+        `wants` are the units enabled (their links under a .wants directory), `runtime` the ones enabled for this
+        start alone (under /run), `running` the ones list-units names; `list_fails`: list-units fails."""
         tmp = pathlib.Path(tempfile.mkdtemp())
-        for i, unit in enumerate(wants):
-            d = tmp / ("timers.target.wants" if unit.endswith(".timer") else "multi-user.target.wants")
-            d.mkdir(exist_ok=True)
-            (d / unit).symlink_to("/dev/null")
-        self.assertIn("  unit_dir=/etc/systemd/system\n", block)
+        for where, units in (("etc", wants), ("run", runtime)):
+            (tmp / where).mkdir()
+            for unit in units:
+                d = tmp / where / ("timers.target.wants" if unit.endswith(".timer") else "multi-user.target.wants")
+                d.mkdir(exist_ok=True)
+                (d / unit).symlink_to("/dev/null")
+        self.assertIn("  unit_dir=/etc/systemd/system\n  run_dir=/run/systemd/system\n", block)
         script = ('fail() { printf "install: %s\\n" "$*" >&2; exit 1; }\n'
                   'systemctl() {\n'
                   '  case "$1" in\n'
                   '    is-enabled) [ "$3" = "$ENABLED" ] ;;\n'
                   '    list-units) [ "$*" = "list-units --plain --no-legend --state=active,activating,reloading colosseum-*" ] || exit 9\n'
+                  '                [ -z "$LIST_FAILS" ] || { echo "Failed to connect to bus" >&2; return 1; }\n'
                   '                for u in $RUNNING; do echo "$u loaded active running a unit of ours"; done ;;\n'
                   '    *) return 1 ;;\n'
                   '  esac\n'
                   '}\n'
                   f'network={network}\ninstances="{instances}"\n'
-                  + block.replace("  unit_dir=/etc/systemd/system\n", f'  unit_dir="{tmp}"\n') + "\nfi\n")
-        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                              env={**os.environ, "ENABLED": is_enabled, "RUNNING": " ".join(running)})
+                  + block.replace("  unit_dir=/etc/systemd/system\n  run_dir=/run/systemd/system\n",
+                                  f'  unit_dir="{tmp}/etc"\n  run_dir="{tmp}/run"\n') + "\nfi\n")
+        return subprocess.run(["bash", "-c", "set -euo pipefail\n" + script], capture_output=True, text=True,
+                              env={**os.environ, "ENABLED": is_enabled, "RUNNING": " ".join(running),
+                                   "LIST_FAILS": "1" if list_fails else ""})
 
     def test_a_mainnet_host_runs_its_one_instances_units_and_nothing_else_systemd_has(self):
         at = self.install.index('if [ "$network" = mainnet ]; then\n  for unit in colosseum-gateway colosseum-keeper colosseum-shared-keeper; do')
@@ -348,12 +354,14 @@ class Install(unittest.TestCase):
             "a simulated pool's keeper of another name": dict(wants=own + (f"colosseum-multi-keeper{demo3}.service",)),
             "an exchange's gateway under the host's own instance's name": dict(wants=own + (f"colosseum-gateway{sim1}.service",)),
             "its own instance's units before the instance is named": dict(wants=own, instances=""),
+            "an instance enabled for this start alone, not running": dict(wants=own, runtime=(f"colosseum-gateway{demo3}.service",)),
         }
         for what, state in left_over.items():
             with self.subTest(what):
                 out = self.guard(block, "mainnet", **state)
                 self.assertEqual(out.returncode, 1, what)
-                named = [u for u in state.get("wants", ()) + state.get("running", ()) if u not in own or not state.get("instances", "x")]
+                named = [u for u in state.get("wants", ()) + state.get("running", ()) + state.get("runtime", ())
+                         if u not in own or not state.get("instances", "x")]
                 self.assertIn("these units are enabled or running, none of them its one instance's: ", out.stderr)
                 for unit in named:
                     self.assertIn(unit, out.stderr, what)
@@ -361,6 +369,13 @@ class Install(unittest.TestCase):
                 # A testnet host is as before: nothing of this is looked at.
                 self.assertEqual(self.guard(block, "testnet", **state).returncode, 0, what)
         self.assertLess(at, self.install.index("site=/etc/nginx/conf.d/pools-api.conf"), "before nginx or a unit")
+        # Its own units enabled for this start alone are its own all the same.
+        self.assertEqual(self.guard(block, "mainnet", runtime=own, running=busy).returncode, 0)
+        # systemd not answering which units run: nothing is switched on a mainnet host; a testnet host does not ask.
+        silent = self.guard(block, "mainnet", wants=own, list_fails=True)
+        self.assertEqual(silent.returncode, 1)
+        self.assertIn("systemd did not say which of our units run (systemctl list-units)", silent.stderr)
+        self.assertEqual(self.guard(block, "testnet", wants=own, list_fails=True).returncode, 0)
 
 
 class Bootstrap(unittest.TestCase):
