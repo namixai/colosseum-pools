@@ -7,6 +7,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { CONFIG } from "../config.js";
 import { isMainnet, networkName, networkWord } from "../lib/network.js";
 import { networkMarks, SCREEN_TEXT } from "../lib/examscreen.js";
@@ -44,7 +46,7 @@ test("testnet's pages are as they were: the tag, the plaque, and the services na
 });
 
 test("a mainnet site's settings are mainnet's, and its panels carry mainnet's plaque, no tag and no word of testnet", async () => {
-  const { CONFIG: main } = await import(new URL(`file://${built.site}/config.js`).href);
+  const { CONFIG: main } = await import(pathToFileURL(join(built.site, "config.js")).href);
   assert.equal(main.chainId, 999);
   assert.equal(main.networkName, "Hyperliquid");
   const network = await built.lib("network.js");
@@ -130,7 +132,7 @@ test("no page of the simulation pools has a faucet, test money or a button for i
 
 test("the wallet is offered the chain the settings name: its id, its name, its currency and its public node", async () => {
   const { ensureChain } = await built.lib("wallet.js");
-  const { CONFIG: main } = await import(new URL(`file://${built.site}/config.js`).href);
+  const { CONFIG: main } = await import(pathToFileURL(join(built.site, "config.js")).href);
   const asked = [];
   let on = "0x1";
   const eth = { request: async ({ method, params }) => {

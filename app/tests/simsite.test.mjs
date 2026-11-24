@@ -8,8 +8,10 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { CONFIG } from "../config.js";
-import { simSite, isSitePool, noContract, simListHtml, NOT_FOUND } from "../lib/simsite.js";
+import { simSite, isSitePool, noContract, readFailed, simListHtml, NOT_FOUND } from "../lib/simsite.js";
 import { indexUrl, askIndex, sourceNote, indexBase } from "../lib/simindex.js";
 import { reviewsUrl, askReviews } from "../lib/simoperator.js";
 import { needsGate } from "../lib/nav.js";
@@ -26,7 +28,7 @@ test("testnet's site names no factory of simulation pools; a mainnet site names 
   assert.equal(simSite(), null);
   assert.equal(simSite(CONFIG), null);
   assert.equal(simSite(null), null);
-  const { CONFIG: main } = await import(new URL(`file://${built.site}/config.js`).href);
+  const { CONFIG: main } = await import(pathToFileURL(join(built.site, "config.js")).href);
   assert.deepEqual(simSite(main), { label: "sim-main", factory: SIM_FACTORY });
   const lib = await built.lib("simsite.js");
   assert.deepEqual(lib.simSite(), { label: "sim-main", factory: SIM_FACTORY });
@@ -127,8 +129,25 @@ test("a page of a pool is drawn only for a pool of the site's factory; on a site
   assert.match(check, /if \(page\.isConnected\) delete document\.body\.dataset\.panel;\s+render\(page, NOT_FOUND\);\s+return false;/, "the page is the site's own, not a panel's");
   // An exam's screen: its pool is asked of the exam and held to the factory's list before anything of the exam is read.
   const exam = read("../views/exam.js");
-  assert.match(exam, /const ofSite = simSite\(\) \? await simPoolOf\(address\) : null;\s+if \(simSite\(\) && !\(await sitePool\(ofSite, page\)\)\) return;\s+const exam = new ethers\.Contract\(address, PAPER_EXAM_ABI, chain\.readProvider\);/);
+  assert.match(exam, /const ofSite = simSite\(\) \? await simPoolOf\(address, true\) : null;\s+if \(simSite\(\) && !\(await sitePool\(ofSite, page\)\)\) return;\s+const exam = new ethers\.Contract\(address, PAPER_EXAM_ABI, chain\.readProvider\);/);
   assert.match(exam, /simSite\(\) \? ofSite : simPoolOf\(address\)\]\);/);
+});
+
+test("\"Not found\" is the contract's answer, never a read that failed on its way", () => {
+  // The contract's own word: a revert, or an answer that is not the getter's (an address that is no exam of a pool).
+  assert.equal(readFailed({ code: "CALL_EXCEPTION", data: "0x" }), false);
+  assert.equal(readFailed({ code: "BAD_DATA", value: "0x" }), false);
+  // The way there: the node's rate limit (inside a batch it comes as BAD_DATA), the network, a timeout, anything else.
+  assert.equal(readFailed({ code: "BAD_DATA", value: { error: { code: -32005, message: "rate limited" } } }), true);
+  assert.equal(readFailed({ code: -32005, message: "rate limited" }), true);
+  assert.equal(readFailed({ code: "SERVER_ERROR", info: { responseStatus: 503 } }), true);
+  assert.equal(readFailed({ code: "TIMEOUT" }), true);
+  assert.equal(readFailed(new TypeError("Failed to fetch")), true);
+  assert.equal(readFailed({ code: "PAGE_LEFT" }), true);
+  assert.equal(readFailed(null), true);
+  const exam = read("../views/exam.js");
+  assert.match(exam, /async function simPoolOf\(address, strict = false\) \{/);
+  assert.match(exam, /\} catch \(err\) \{\s+if \(strict && readFailed\(err\)\) throw err;\s+return null;\s+\}/, "on a site of simulation pools a failed read is the page's failure, with its Try again");
 });
 
 test("the entry question is asked again on mainnet: testnet's answer is kept under testnet's name only", () => {
@@ -158,7 +177,7 @@ test("a site that names no index says so, and its panels read the chain themselv
   // A mainnet site whose entry names where its index answers asks there.
   const indexed = mainnetSite({ gateway: "https://pools-api.usenami.io/sim" });
   try {
-    const { CONFIG: main } = await import(new URL(`file://${indexed.site}/config.js`).href);
+    const { CONFIG: main } = await import(pathToFileURL(join(indexed.site, "config.js")).href);
     assert.equal(indexBase(main), "https://pools-api.usenami.io/sim");
     assert.equal(indexUrl(indexBase(main), POOL), `https://pools-api.usenami.io/sim/v1/simindex/pool?pool=${POOL}`);
   } finally {

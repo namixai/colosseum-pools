@@ -17870,6 +17870,14 @@ MUTATIONS = [
      '<div class="sp-kick">Operator panel · ${esc(name)} · ${esc(network)}</div>',
      '<div class="sp-kick">Operator panel · ${esc(name)} · Hyperliquid testnet</div>',
      ["the hero names the network the site's settings name, and none of its own"]),
+    ("J251", "app/lib/simsite.js",
+     'export const readFailed = (err) => rateLimited(err) || !["BAD_DATA", "CALL_EXCEPTION"].includes(err?.code);',
+     'export const readFailed = (err) => !["BAD_DATA", "CALL_EXCEPTION"].includes(err?.code);',
+     ['"Not found" is the contract\'s answer, never a read that failed on its way']),
+    ("J252", "app/views/exam.js",
+     "    if (strict && readFailed(err)) throw err;\n",
+     "",
+     ['"Not found" is the contract\'s answer, never a read that failed on its way']),
 ]
 
 RUNNERS = {

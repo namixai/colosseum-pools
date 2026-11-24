@@ -6,7 +6,7 @@
 // pool's address, as they did. No browser globals and no reads here, so node's test runner loads it
 // (app/tests/simsite.test.mjs): the view reads the factory (app/views/simsite.js) and hands the answer in.
 import { CONFIG } from "../config.js";
-import { esc, sameAddress } from "./ui.js";
+import { esc, sameAddress, rateLimited } from "./ui.js";
 
 /** The factory whose pools the site shows (`{ label, factory }`), or null on a site whose settings name none. */
 export const simSite = (config = CONFIG) => config?.sim ?? null;
@@ -21,6 +21,13 @@ export function isSitePool(pools, address) {
  *  ethers reports as BAD_DATA with the value "0x". A rate limit met inside a batch is BAD_DATA too, with the node's
  *  own answer as its value (app/lib/ui.js, rateLimitedBy): that one is a failed read, never "no contract". */
 export const noContract = (err) => err?.code === "BAD_DATA" && err?.value === "0x";
+
+/** Whether a read failed on its way to an answer (the node's rate limit, the network, anything that is not the
+ *  contract's own word), as against the contract answering: a revert, or bytes that are not the getter's. Only the
+ *  second says what stands at an address. A rate limit met inside a batch reaches a page as BAD_DATA, so it is asked
+ *  first. An exam's screen on a site of simulation pools draws "Not found" on the contract's answer alone: a read
+ *  that failed is the page's failure, with its "Try again". */
+export const readFailed = (err) => rateLimited(err) || !["BAD_DATA", "CALL_EXCEPTION"].includes(err?.code);
 
 /** What a page that is not one of the site's draws: the words of the site's own "no such page". */
 export const NOT_FOUND = `<section class="card"><h2>Not found</h2><p><a href="#/">Back to the pools</a></p></section>`;
