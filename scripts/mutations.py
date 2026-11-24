@@ -17551,6 +17551,19 @@ MUTATIONS = [
      "            if problems and k > 0:\n                j.unread.append(",
      "            if False:\n                j.unread.append(",
      ["test_a_second_journal_file_not_read_to_its_end_is_said_and_its_blocks_rest_on_one_journal"]),
+    # Review 16: whether the second journal is coming is asked of its plain day files; the alarms said stay said.
+    ("RZ28", "ops/review_service.py",
+     "            if stat.S_ISREG(st.st_mode):\n                times.append(st.st_mtime)",
+     "            if True:\n                times.append(st.st_mtime)",
+     ["test_a_link_or_a_file_gone_is_no_journal_coming"]),
+    ("RZ29", "ops/review_service.py",
+     "                st = os.lstat(f)\n            except OSError:\n                continue",
+     "                st = os.lstat(f)\n            except KeyError:\n                continue",
+     ["test_a_link_or_a_file_gone_is_no_journal_coming"]),
+    ("RZ30", "ops/review_service.py",
+     "    finally:\n        save_said(said_path, said)  # whatever these two do, the alarms the pass said stay said",
+     "    finally:\n        pass",
+     ["test_the_alarms_said_stay_said_whatever_the_last_looks_do"]),
 ]
 
 RUNNERS = {

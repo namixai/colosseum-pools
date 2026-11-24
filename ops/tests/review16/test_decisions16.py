@@ -330,5 +330,70 @@ class SecondJournalNotRead(unittest.TestCase):
         self.assertNotIn("_second_unread", said, "an alarm the channel did not take is not remembered")
 
 
+class TheSecondJournalStands(unittest.TestCase):
+    """Whether the second writer's journal is coming is asked of its plain day files alone; what cannot be looked at is
+    no journal coming, which is the alarm, and never the pass's failure."""
+
+    NOW = 1_800_000_000
+
+    def setUp(self):
+        import pathlib
+        import shutil
+        import tempfile
+        self.d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.path = self.d / "watch-prices-sim1.jsonl"
+
+    def look(self, said=None):
+        from ops import review_service as rs
+        got = []
+        rs.second_stale(self.path, self.NOW, {} if said is None else said, lambda event, **f: got.append((event, f["newest"])) or True)
+        return got
+
+    def day(self, name, age):
+        import os
+        f = self.d / f"watch-prices-sim1-{name}.jsonl"
+        f.write_text("x\n")
+        os.utime(f, (self.NOW - age, self.NOW - age))
+        return f
+
+    def test_a_link_or_a_file_gone_is_no_journal_coming(self):
+        import os
+        from ops import review_service as rs
+        fresh = self.day("2026-11-24", 5)
+        said = {"_second": 1.0}
+        self.assertEqual(self.look(said), [])
+        self.assertEqual(said, {}, "coming: forgotten")
+        fresh.rename(self.d / "elsewhere")
+        (self.d / "watch-prices-sim1-2026-11-24.jsonl").symlink_to(self.d / "elsewhere")
+        self.assertEqual(self.look(), [("second_journal_stale", "none")], "a link to a fresh file is no day file")
+        (self.d / "watch-prices-sim1-2026-11-23.jsonl").symlink_to(self.d / "nowhere")
+        old = self.day("2026-11-22", 4_000)
+        self.assertEqual(self.look(), [("second_journal_stale", rs.utc(self.NOW - 4_000))])
+        real = os.lstat
+
+        def lstat(f, *a, **kw):  # gone between the listing and the look
+            if str(f) == str(old):
+                raise FileNotFoundError(f)
+            return real(f, *a, **kw)
+        with mock.patch.object(rs.os, "lstat", lstat):
+            self.assertEqual(self.look(), [("second_journal_stale", "none")])
+        self.path = self.d / "no-such-folder" / "watch-prices-sim1.jsonl"
+        self.assertEqual(self.look(), [("second_journal_stale", "none")])
+
+    def test_the_alarms_said_stay_said_whatever_the_last_looks_do(self):
+        import pathlib
+        from ops import review_service as rs
+        from ops.tests.test_review_service import Held, POOL
+        ch, _ = Held().world()
+        with mock.patch.object(rs.pr, "read_chain", return_value=ch.d), mock.patch.object(rs.core, "log"), \
+                mock.patch.object(rs.deployments, "load", return_value={"SimPoolFactory": "0x" + "11" * 20, "block": 1}), \
+                mock.patch.object(rs.sn, "confirm_service"), mock.patch.object(rs.sf.Alarm, "__call__", lambda self_, event, **kw: True), \
+                mock.patch.object(rs, "second_stale", side_effect=RuntimeError("anything")):
+            with self.assertRaises(RuntimeError):
+                rs.main(["--deployment", "x", "--out", str(self.d), "--no-candles"])
+        self.assertIn(f"{POOL}-0", json.loads((pathlib.Path(self.d) / "said.json").read_text()))
+
+
 if __name__ == "__main__":
     unittest.main()

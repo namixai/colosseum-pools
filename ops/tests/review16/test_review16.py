@@ -241,7 +241,6 @@ class Seams16(unittest.TestCase):
         self.assertTrue(j.notes)
         self.assertEqual(j.single_count(3, 1_003, 1_305), 303)
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_second_stale_does_not_crash_the_pass_on_a_file_that_is_not_there_by_the_time_it_is_looked_at(self):
         d = tmp(self)
         (d / "watch-prices-sim1-2026-11-24.jsonl").symlink_to(d / "nowhere")

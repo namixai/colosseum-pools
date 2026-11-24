@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import pathlib
+import stat
 import sys
 import time
 
@@ -205,8 +206,21 @@ def second_stale(path: pathlib.Path | None, now: float, said: dict, alarm, limit
     blocks are then the keeper's journal's alone, and a restart of the keeper holds payouts again."""
     if path is None:
         return
-    files = sorted(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
-    newest = max((f.stat().st_mtime for f in files), default=None)
+    # Only a plain day file counts, as only one is read (`payout_review.journal_files`): a link, a file gone since it
+    # was listed or a folder that cannot be listed is no journal coming, and that is the alarm, never a failed pass
+    # (review 16 of #338).
+    times = []
+    try:
+        for f in path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"):
+            try:
+                st = os.lstat(f)
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                times.append(st.st_mtime)
+    except OSError:
+        times = []
+    newest = max(times, default=None)
     if newest is not None and now - newest < limit:
         said.pop("_second", None)
         return
@@ -407,9 +421,11 @@ def main(argv: list[str] | None = None) -> int:
                 said["_failed"] = time.time()
         save_said(said_path, said)
         raise
-    second_unread(unread, time.time(), said, alarm)
-    second_stale(second, time.time(), said, alarm)
-    save_said(said_path, said)
+    try:
+        second_unread(unread, time.time(), said, alarm)
+        second_stale(second, time.time(), said, alarm)
+    finally:
+        save_said(said_path, said)  # whatever these two do, the alarms the pass said stay said
     return 0
 
 
