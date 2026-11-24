@@ -950,7 +950,9 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   `scan.json` makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
-- `status.json`, the end of the last pass (its time, block, payouts waiting and held), which the stops' loop in the
+- `status.json`, the end of the last pass (its time, block, payouts waiting and held, and `linksLeft`: how many
+  buyers' funding is not read to the end and how many blocks are left for them, numbers only; the index's public
+  health route takes the time of the pass from this file and nothing else), which the stops' loop in the
   keeper's process watches (`COLOSSEUM_REVIEW_STATUS` in the keeper's unit): older than 30 minutes with payouts
   waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts;
 - `said.json` and `ALARM`: the alarms raised, each remembered only once the channel took it.

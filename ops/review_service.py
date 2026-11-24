@@ -24,7 +24,7 @@ Every block of each stop's time is judged by the journals of prices (--prices, t
 writer's from another machine), the venue's minute candles kept in --out (`ops/venue_candles.py`, fetched each pass),
 and, when there is one, a node that answers for old blocks (--archive-rpc). The logs read are kept in --out/scan.json:
 each pass reads only the new blocks. The end of each pass goes to --out/status.json, whose age the stops' loop
-watches.
+watches; it says too how far the reading of the buyers' funding is (`linksLeft`: buyers not read, blocks left).
 
 It sends nothing and holds no key. On the host: colosseum-payout-review@<name>.service run by its .timer every 10
 minutes (ops/host). Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet.
@@ -152,7 +152,7 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     for r in reviews:
         write(out, pr.card(r, chain))
     write_status(out, {"at": int(time.time()), "chainNow": now, "block": chain["latest"], "due": len(reviews),
-                       "held": sum(r["action"] == "hold" for r in reviews)})
+                       "held": sum(r["action"] == "hold" for r in reviews), "linksLeft": links_left(chain)})
     until = time.monotonic() + ALARM_BUDGET_S
     for r in reviews:
         a = alarm_of(r)
@@ -191,6 +191,18 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     core.log("review_done", payouts=len(reviews), block=chain["latest"],
              suspicious=sum(r["verdict"] == "suspicious" for r in reviews))
     return reviews
+
+
+def links_left(chain: dict) -> dict | None:
+    """What status.json says of the reading of the buyers' funding (`payout_review.LogScan.links_left`): how many
+    buyers are not read to the end and how many blocks are left for them, so that a person looking at payouts held as
+    `links-unread` sees it move. Two whole numbers and nothing else of what the chain's reading holds; None where the
+    reading gave none."""
+    left = chain.get("linksLeft")
+    try:
+        return {"buyers": int(left["buyers"]), "blocks": int(left["blocks"])}
+    except (TypeError, KeyError, ValueError):
+        return None
 
 
 def write_status(out: pathlib.Path, status: dict) -> None:

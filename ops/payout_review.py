@@ -3317,6 +3317,15 @@ class LogScan:
         got = self.d["links"].get(trader)
         return got is not None and int(got["at"]) > int(got["to"])
 
+    def links_left(self) -> dict:
+        """How far the reading of the buyers' funding is (`read_links`), as two numbers and no address: the buyers not
+        read to the end, and the blocks still to read for them, each buyer's own (buyers at the same block go in one
+        call, so the calls left are fewer). A buyer with no span kept yet (seen before the spans were kept: `read_links`
+        makes it once a payout waits) is counted as not read, its blocks from then on."""
+        spans = self.d["links"]
+        left = [int(g["to"]) - int(g["at"]) + 1 for g in spans.values() if int(g["at"]) <= int(g["to"])]
+        return {"buyers": len(left) + sum(t not in spans for t in self.traders()), "blocks": sum(left)}
+
     def read_links(self, traders: list[str], usdc: str, until: float | None = None) -> list[str]:
         """The incoming USDC of every buyer of the factory from the deployment's block to the block each was first seen
         in, once a payout waits (`traders`: those with one; none, nothing is read). Buyers at the same block go in one
@@ -3566,7 +3575,7 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         venue = venue_candles.to_venue(candles)
     return {"chainId": chain_id, "now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
-            "linksUnread": links_unread,
+            "linksUnread": links_unread, "linksLeft": kept.links_left(),
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
             "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),

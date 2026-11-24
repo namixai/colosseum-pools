@@ -17702,6 +17702,27 @@ MUTATIONS = [
      "    \"links-unread\": \"the funding of the factory's buyers is still being read\",\n",
      "",
      ["test_outside_the_host_only_what_the_page_decides_by_no_evidence_no_draft_no_other_trader"]),
+    # status.json says how far the reading of the buyers' funding is: the buyers not read, the blocks left, no more.
+    ("RZ36", "ops/payout_review.py",
+     "        left = [int(g[\"to\"]) - int(g[\"at\"]) + 1 for g in spans.values() if int(g[\"at\"]) <= int(g[\"to\"])]",
+     "        left = [int(g[\"to\"]) - int(g[\"at\"]) + 1 for g in spans.values()]",
+     ["test_how_far_the_reading_is_is_said_in_two_numbers_the_buyers_not_read_and_the_blocks_left"]),
+    ("RZ37", "ops/payout_review.py",
+     "        return {\"buyers\": len(left) + sum(t not in spans for t in self.traders()), \"blocks\": sum(left)}",
+     "        return {\"buyers\": len(left), \"blocks\": sum(left)}",
+     ["test_how_far_the_reading_is_is_said_in_two_numbers_the_buyers_not_read_and_the_blocks_left"]),
+    ("RV232", "ops/payout_review.py",
+     "            \"linksUnread\": links_unread, \"linksLeft\": kept.links_left(),",
+     "            \"linksUnread\": links_unread, \"linksLeft\": None,",
+     ["test_it_reads_sales_stages_payouts_the_accounts_events_the_oracle_and_transfers"]),
+    ("AL18", "ops/review_service.py",
+     "\"held\": sum(r[\"action\"] == \"hold\" for r in reviews), \"linksLeft\": links_left(chain)})",
+     "\"held\": sum(r[\"action\"] == \"hold\" for r in reviews)})",
+     ["test_status_json_says_how_far_the_reading_is_in_two_numbers_and_nothing_else_of_it"]),
+    ("AL19", "ops/review_service.py",
+     "        return {\"buyers\": int(left[\"buyers\"]), \"blocks\": int(left[\"blocks\"])}\n    except (TypeError, KeyError, ValueError):",
+     "        return left\n    except (TypeError, KeyError, ValueError):",
+     ["test_status_json_says_how_far_the_reading_is_in_two_numbers_and_nothing_else_of_it"]),
 ]
 
 RUNNERS = {

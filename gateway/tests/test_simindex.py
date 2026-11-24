@@ -551,6 +551,19 @@ class HostPulse(unittest.TestCase):
         self.assertIsNone(self.pulse().review_at())
         self.assertEqual(simindex.Pulse(None, None).answer()["prices_at"], None)
 
+    def test_of_the_reviews_status_the_route_takes_the_time_of_its_last_pass_and_nothing_more(self):
+        """status.json also says, for a person on the host, how many payouts wait and are held and how far the review's
+        reading of the buyers' funding is (`linksLeft`). The public route is not widened by any of it."""
+        (self.reviews / "status.json").write_text(json.dumps({
+            "at": self.now - 400, "chainNow": self.now - 401, "block": 77, "due": 2, "held": 1,
+            "linksLeft": {"buyers": 3, "blocks": 12_500}}))
+        self.assertEqual(self.pulse().answer(), {"now": self.now, "prices_at": None, "review_at": self.now - 400})
+        index = make(Node(history(), head=3000), tempfile.mkdtemp())
+        read_all(index)
+        self.assertEqual(sorted({**index.health(), **self.pulse().answer()}),
+                         sorted(["ok", "chain_id", "factory", "from_block", "scanned_to", "head", "behind_blocks", "pools",
+                                 "window", "updated_at", "last_error", "errors", "now", "prices_at", "review_at"]))
+
     def test_the_health_route_carries_it_uncached_and_the_settings_name_the_journal(self):
         index = make(Node(history(), head=3000), tempfile.mkdtemp())
         read_all(index)

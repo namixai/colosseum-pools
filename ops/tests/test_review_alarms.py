@@ -173,6 +173,23 @@ class FundingStillRead(unittest.TestCase):
         self.at(70 + 6 * 60)
         self.assertEqual(self.alarms(), [(70, "payout_held"), (430, "payout_held")])
 
+    def test_status_json_says_how_far_the_reading_is_in_two_numbers_and_nothing_else_of_it(self):
+        self.ch.d["linksLeft"] = {"buyers": 3, "blocks": 12_500, "of": [self.trader]}
+        self.at(0)
+        text = (self.out / "status.json").read_text()
+        status = json.loads(text)
+        self.assertEqual(status["linksLeft"], {"buyers": 3, "blocks": 12_500})
+        self.assertEqual((status["due"], status["held"]), (1, 1))
+        self.assertNotIn("0x", text, "numbers, no address")
+        self.assertLess(len(text), 4_096, "the index's pulse reads its time only from a file under 4 KB")
+        for none in ({}, None, {"buyers": "many"}, {"buyers": 1}, [3, 4]):
+            self.ch.d["linksLeft"] = none
+            self.at(10)
+            self.assertIsNone(json.loads((self.out / "status.json").read_text())["linksLeft"], none)
+        del self.ch.d["linksLeft"]
+        self.at(20)
+        self.assertIsNone(json.loads((self.out / "status.json").read_text())["linksLeft"], "a reading that gave none")
+
     def test_the_kind_has_words_of_its_own_on_the_route_the_page_reads(self):
         from gateway import simindex
         self.assertIn(pr.LINKS_UNREAD, simindex.REASON_WORDS)
