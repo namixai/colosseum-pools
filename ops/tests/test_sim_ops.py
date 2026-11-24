@@ -1537,8 +1537,9 @@ class TheClosing(unittest.TestCase):
         doc.update(change)
         return doc
 
-    def approve_main(self, argv, docs, node=None, confirm=None):
-        """`confirm(folder)`: what happens while the person confirms the send (the wait of `confirm_send` on mainnet)."""
+    def approve_main(self, argv, docs, node=None, confirm=None, named=True):
+        """`confirm(folder)`: what happens while the person confirms the send (the wait of `confirm_send` on mainnet).
+        `named` False: --reviews is not given, and the documents are in the command's own default folder."""
         import contextlib
         import tempfile
         from unittest import mock
@@ -1546,18 +1547,21 @@ class TheClosing(unittest.TestCase):
         node = node or {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
         answers = {"payoutCount()": [5], "payout(uint256)": [self.WAITING], "factory()": ["0x" + "99" * 20],
                    "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as state:
+            folder = str(pathlib.Path(state) / "reviews")
+            pathlib.Path(folder).mkdir()
             for pid, doc in docs.items():
                 (pathlib.Path(folder) / f"{d.to_checksum_address(self.OTHER)}-{pid}.json").write_text(json.dumps(doc))
             with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
                     mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): node[m]), \
                     mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
-                    mock.patch.object(d.c, "account") as key, mock.patch("builtins.print"), \
+                    mock.patch.object(d.c, "account") as key, mock.patch("builtins.print") as said, \
                     mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent, \
+                    mock.patch.object(d, "sk_state", return_value=pathlib.Path(state)), \
                     (mock.patch.object(d.sn, "confirm_send", side_effect=lambda *a, **kw: confirm(pathlib.Path(folder)))
                      if confirm else contextlib.nullcontext()):
-                self.sent = sent
-                got = d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--reviews", folder, *argv])
+                self.sent, self.said, self.folder = sent, said, folder
+                got = d.main(["approve", "--pool", self.OTHER, "--key", "approver", *(["--reviews", folder] if named else []), *argv])
                 return got, sent, key
 
     def test_approve_sends_only_with_send(self):
@@ -1601,6 +1605,40 @@ class TheClosing(unittest.TestCase):
                               {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_000 + 3_601)}})
         src = pathlib.Path(d.__file__).read_text()
         self.assertNotIn("--no-review", src)
+
+    def test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none(self):
+        """The host's review service writes /var/lib/colosseum-keeper/reviews-<name>; without --reviews the command reads
+        ops/state/reviews, what a review run in the checkout writes. It never guesses the host's folder: it says which
+        folder it read, and where a payout has no document in the default one, where the host's documents are."""
+        printed = lambda: "\n".join(str(call.args[0]) for call in self.said.call_args_list if call.args)
+        with self.assertRaises(SystemExit) as caught:
+            self.approve_main(["--ids", "3", "--send"], {}, named=False)
+        text = str(caught.exception)
+        self.assertIn("NoReview", text)
+        self.assertIn(f"no review at {self.folder}", text)
+        self.assertIn(f"--reviews was not given: the reviews were looked for in {self.folder}", text)
+        self.assertIn("/var/lib/colosseum-keeper/reviews-<name>", text)
+        self.assertIn("docs/HOSTING.md", text)
+        self.sent.assert_not_called()
+        # A folder named and empty: the refusal alone, the person chose it.
+        with self.assertRaises(SystemExit) as caught:
+            self.approve_main(["--ids", "3", "--send"], {})
+        self.assertIn(f"no review at {self.folder}", str(caught.exception))
+        self.assertNotIn("--reviews was not given", str(caught.exception))
+        # A review there that does not carry the approval is no missing folder: no pointer to the host.
+        with self.assertRaises(SystemExit) as caught:
+            self.approve_main(["--ids", "3"], {3: self.review(3, action="hold", verdict="suspicious", call=None)}, named=False)
+        self.assertNotIn("--reviews was not given", str(caught.exception))
+        # Fresh reviews in the default folder (a review run here): approved, and the folder is said as the default.
+        got, sent, _ = self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, named=False)
+        self.assertEqual((got, sent.call_count), (0, 1))
+        self.assertIn(f"the reviews were read from {self.folder} (the default: --reviews names another folder)", printed())
+        self.approve_main(["--ids", "3"], {3: self.review(3)})
+        self.assertIn(f"the reviews were read from {self.folder}\n", printed() + "\n")
+        self.assertNotIn("the default", printed())
+        docs = (pathlib.Path(d.__file__).resolve().parents[1] / "docs" / "HOSTING.md").read_text()
+        self.assertIn("-m ops.deploy_sim approve --pool <pool> --signer <the Ledger's address> --ids <ids> "
+                      "--reviews ./reviews-<name>", docs, "the procedure names the command's own arguments")
 
     def test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends(self):
         """On mainnet the confirmation waits for a person, with no limit: a review fresh before the wait can be past

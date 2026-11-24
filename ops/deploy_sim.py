@@ -63,8 +63,11 @@ cancels it, from the creator's key or the closer's.
 approves waiting payouts from it: an approved payout goes out 72 hours after its claim, one not
 approved 7 days after. Without --send `approve` reads each payout and says whose it is, how much,
 from when it goes out with the approval and from when without, or why the pool would refuse it. Each payout is approved
-only on a fresh review that says approve (the review service's `<pool>-<id>.json` in --reviews, ops/state/reviews by
-default, of this chain, pool and payout, read within the hour); without one the command refuses and says why, and there
+only on a fresh review that says approve (the review service's `<pool>-<id>.json` in --reviews, of this chain, pool and
+payout, read within the hour). Without --reviews the folder is ops/state/reviews, what a review run in this checkout
+writes; the host's service writes /var/lib/colosseum-keeper/reviews-<name>, which is copied to the approver's machine and
+named with --reviews (docs/HOSTING.md); the command says which folder it read, and where a document is missing from the
+default one, where the host's are. Without a review the command refuses and says why, and there
 is no flag around it: a payout not approved goes out by itself at its ceiling. With --send the reviews are read again
 once the send is confirmed, against the head as it stands then: on mainnet the confirmation waits for a person, for as
 long as they take. Like `close` and `finish`, without --send each reads
@@ -999,16 +1002,31 @@ def sk_state() -> pathlib.Path:
     return pathlib.Path(core.STATE_DIR)
 
 
+# Said when `approve` was not told where the reviews are and found none of a payout in its own default.
+REVIEWS_HINT = ("--reviews was not given: the reviews were looked for in {folder}, where a review run in this checkout "
+                "writes them. The host's review service writes /var/lib/colosseum-keeper/reviews-<name>: copy that "
+                "folder as it is and name the copy with --reviews (docs/HOSTING.md, \"The payout review\")")
+
+
+def reviews_of(args) -> tuple[pathlib.Path, bool]:
+    """The folder `approve` reads its reviews from, and whether --reviews named it: without it, ops/state/reviews, what a
+    review run in this checkout writes (`payout_review.REVIEWS_DIR`), never the host's folder by a guess."""
+    given = getattr(args, "reviews", None)
+    return (pathlib.Path(given), True) if given else (sk_state() / "reviews", False)
+
+
 def review_check(reviews: pathlib.Path, pool_: str, payouts: dict, ids: list[int], chain_id: int, latest: int,
-                 now: int) -> list[str]:
+                 now: int, hint: str = "") -> list[str]:
     """Each payout of `ids` approved only on a fresh review that says "approve": the document the review's service
     wrote (`<reviews>/<pool>-<id>.json`, `ops/payout_review.py --out`), of this chain, pool and payout, read at most an
     hour before (`payout_review.card_problem`). A payout without one is refused, with why, and nothing is approved:
     there is no way round it here, and none is needed, since a payout not approved goes out by itself at its ceiling
-    (review 12 of #336). `payouts`: id → the pool's payout(id)."""
+    (review 12 of #336). `payouts`: id → the pool's payout(id). `hint`: said after the refusal where a document was not
+    found (the folder was the default, not one --reviews named)."""
     from ops import payout_review as pr
 
     problems, lines = [], []
+    missing = False
     for i in ids:
         p = payouts[i]
         path = reviews / f"{pool_}-{i}.json"
@@ -1016,6 +1034,7 @@ def review_check(reviews: pathlib.Path, pool_: str, payouts: dict, ids: list[int
             doc = json.loads(path.read_text())
         except (OSError, ValueError):
             problems.append(f"payout {i}: no review at {path}")
+            missing = True
             continue
         why = pr.card_problem(doc, pool_, i, {"trader": p[1], "amount": p[2], "dueAt": p[3]}, chain_id, latest, now)
         if why:
@@ -1024,7 +1043,8 @@ def review_check(reviews: pathlib.Path, pool_: str, payouts: dict, ids: list[int
             lines.append(f"payout {i}: reviewed at block {doc['readAt']['block']}, clean")
     if problems:
         raise SystemExit("NoReview: approving rests on a fresh review that says approve, and these have none; nothing "
-                         "was approved (an unapproved payout goes out by itself at its ceiling):\n  " + "\n  ".join(problems))
+                         "was approved (an unapproved payout goes out by itself at its ceiling):\n  " + "\n  ".join(problems)
+                         + (f"\n  {hint}" if hint and missing else ""))
     return lines
 
 
@@ -1051,17 +1071,20 @@ def approve(args) -> int:
     lines = approve_check(approver, sender, payouts, ids, hard)
     latest = int(c.rpc("eth_blockNumber"), 16)
     now = int(c.rpc("eth_getBlockByNumber", [hex(latest), False])["timestamp"], 16)
-    lines += review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), latest, now)
+    reviews, named = reviews_of(args)
+    hint = "" if named else REVIEWS_HINT.format(folder=reviews)
+    lines += review_check(reviews, pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), latest, now, hint)
     print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key or 'the signer'} ({sender})")
     for line in lines:
         print("  " + line)
+    print(f"  the reviews were read from {reviews}" + ("" if named else " (the default: --reviews names another folder)"))
     print("  approving sets neither the amount nor the trader; the checker can still stop each until it is paid")
 
     def still_fresh() -> None:
         # The person's confirmation has no time limit: the reviews are held to the head as it stands after it.
         head = int(c.rpc("eth_blockNumber"), 16)
         head_time = int(c.rpc("eth_getBlockByNumber", [hex(head), False])["timestamp"], 16)
-        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), head, head_time)
+        review_check(reviews, pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), head, head_time, hint)
     return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids], before=still_fresh)
 
 
@@ -1514,9 +1537,10 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--key", help="the pool's approver")
     z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
-    z.add_argument("--reviews", default=str(sk_state() / "reviews"),
+    z.add_argument("--reviews", default=None,
                    help="the review service's documents, <pool>-<id>.json (ops/payout_review.py --out): each payout needs a "
-                   "fresh one that says approve")
+                   "fresh one that says approve. Not given: ops/state/reviews, what a review run in this checkout writes; "
+                   "the host's service writes /var/lib/colosseum-keeper/reviews-<name>, copied here and named with this")
     z.add_argument("--send", action="store_true")
     z = sub.add_parser("lift")
     z.add_argument("--pool", required=True)

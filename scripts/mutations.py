@@ -17300,9 +17300,26 @@ MUTATIONS = [
      "    if False:\n        before()\n",
      ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
     ("SK241", "ops/deploy_sim.py",
-     "        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time)",
-     "        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), latest, now)",
+     "        review_check(reviews, pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time, hint)",
+     "        review_check(reviews, pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), latest, now, hint)",
      ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
+    # `approve` without --reviews: its own default folder, said, with where the host's reviews are when it holds none.
+    ("SK242", "ops/deploy_sim.py",
+     "                         + (f\"\\n  {hint}\" if hint and missing else \"\"))",
+     "                         + \"\")",
+     ["test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none"]),
+    ("SK243", "ops/deploy_sim.py",
+     "    hint = \"\" if named else REVIEWS_HINT.format(folder=reviews)",
+     "    hint = REVIEWS_HINT.format(folder=reviews)",
+     ["test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none"]),
+    ("SK244", "ops/deploy_sim.py",
+     "                         + (f\"\\n  {hint}\" if hint and missing else \"\"))",
+     "                         + (f\"\\n  {hint}\" if hint else \"\"))",
+     ["test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none"]),
+    ("SK245", "ops/deploy_sim.py",
+     "    print(f\"  the reviews were read from {reviews}\" + (\"\" if named else \" (the default: --reviews names another folder)\"))",
+     "    pass",
+     ["test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none"]),
 ]
 
 RUNNERS = {

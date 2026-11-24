@@ -973,9 +973,11 @@ To approve with the Ledger, the full documents go to the approver's machine, cop
 of the index hands out only a cut of each, and `approve` refuses it):
 
     scp -r <host>:/var/lib/colosseum-keeper/reviews-<name>/ ./reviews-<name>
-    spike/.venv/bin/python -m ops.deploy_sim approve --deployment <label> --reviews ./reviews-<name> ...
+    spike/.venv/bin/python -m ops.deploy_sim approve --pool <pool> --signer <the Ledger's address> --ids <ids> --reviews ./reviews-<name>
 
-A copy older than an hour is refused as the host's own would be: copy, then approve.
+A copy older than an hour is refused as the host's own would be: copy, then approve. Without `--reviews` the command
+reads `ops/state/reviews` of its own checkout (what a review run there writes), never the host's folder: it says which
+folder it read, and where a payout has no document there it says where the host's are.
 
 ### The second writer of prices
 
