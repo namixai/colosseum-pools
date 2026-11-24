@@ -315,6 +315,33 @@ class ReviewAge(S.Base):
         loop2._review_age()
         self.assertEqual(len(self.events("review_stale")), 2)
 
+    def test_a_review_catching_up_is_alive_to_the_watch_and_one_that_then_stops_is_held_to_the_payouts_that_waited(self):
+        """A pass that ran out of its time before the head writes its own end to status.json: the review runs, and the
+        watch of the file's age says nothing. It keeps how many payouts waited at the last pass that read to the head,
+        so a review that stops after it is stale in 30 minutes, as one that stopped after that pass would be."""
+        from gateway import simindex
+        now = 1_000_000 + self.node.head
+        rs.write_status(self.dir, {"at": now - 4_000, "chainNow": 5, "block": 7, "due": 2, "held": 1, "linksLeft": None})
+        with mock.patch.object(rs.core, "log"):
+            rs.fell_behind(self.dir, pr.Behind(500, 9_000), {}, now - 600)
+        text = (self.dir / "status.json").read_text()
+        self.assertEqual(json.loads(text), {"at": now - 600, "due": 2, "held": 1,
+                                            "behind": {"readTo": 500, "head": 9_000, "since": now - 600}})
+        self.assertLess(len(text), 4_096, "the index's pulse reads its time only from a file under 4 KB")
+        self.assertEqual(simindex.Pulse(None, self.dir).review_at(), now - 600)
+        loop = self.loop(review_status=self.dir / "status.json")
+        loop._review_age()
+        self.assertEqual(self.events("review_stale"), [], "its last pass ended ten minutes ago, behind: it runs")
+        self.node.head += 1_300
+        loop._review_age()
+        self.assertEqual(len(self.events("review_stale")), 1, "no pass since, and payouts waited: 30 minutes")
+        # With no pass that read to the head before it, it says of the payouts nothing it does not know.
+        (self.dir / "status.json").unlink()
+        with mock.patch.object(rs.core, "log"):
+            rs.fell_behind(self.dir, pr.Behind(500, 9_000), {"_behind": {"since": now - 900}}, now - 600)
+        self.assertEqual(json.loads((self.dir / "status.json").read_text()),
+                         {"at": now - 600, "behind": {"readTo": 500, "head": 9_000, "since": now - 900}})
+
 
 class Failures(unittest.TestCase):
     def setUp(self):
@@ -353,6 +380,156 @@ class Failures(unittest.TestCase):
         self.assertEqual(got, ["second_journal_stale"])
         rs.second_stale(path, 1_000 + 3_600 + 6 * H, said, alarm)
         self.assertEqual(len(got), 2)
+
+
+class FallenBehind(unittest.TestCase):
+    """A pass has PASS_BUDGET_S to read the chain; out of them it saves what it read and the next one goes on
+    (`payout_review.Behind`). Found on a copy of the network with a long history: the wrapper that keeps the node's
+    address out of a failure took that for one, and 13 passes in a row ended as `review_failed` with code 1. It is no
+    failure: code 0, a line, the pass's end in status.json and no document; over an hour of it is an alarm of its own."""
+
+    T0 = 1_800_000_000
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.raised, self.lines, self.now, self.took = [], [], self.T0, True
+
+    def run_pass(self, chain, minutes=None, record=None, **patches) -> int:
+        """One run of the service `minutes` after T0. `chain` is what the chain's reading does: the exception it raises,
+        the chain it returns, or None for the reading itself (on the node `patches` stand in for). Its exit code."""
+        from contextlib import ExitStack
+        if minutes is not None:
+            self.now = self.T0 + 60 * minutes
+        took = lambda self_, event, **kw: (self.raised.append(((self.now - self.T0) // 60, event, kw)), self.took)[1]  # noqa: E731
+        with ExitStack() as stack:
+            if chain is not None:
+                read = {"side_effect": chain} if isinstance(chain, BaseException) else {"return_value": chain}
+                stack.enter_context(mock.patch.object(rs.pr, "read_chain", **read))
+            for target, name, value in patches.values():
+                stack.enter_context(mock.patch.object(target, name, value))
+            stack.enter_context(mock.patch.object(rs.deployments, "load", return_value=record or {
+                "SimPoolFactory": "0x" + "11" * 20, "block": 1}))
+            stack.enter_context(mock.patch.object(rs.sn, "confirm_service"))
+            stack.enter_context(mock.patch.object(rs, "fetch_candles", return_value=None))
+            stack.enter_context(mock.patch.object(rs.core, "log", side_effect=lambda event, **f: self.lines.append((event, f))))
+            stack.enter_context(mock.patch.object(rs.time, "time", side_effect=lambda: float(self.now)))
+            stack.enter_context(mock.patch.object(sf.Alarm, "__call__", took))
+            return rs.main(["--deployment", "x", "--out", str(self.dir)])
+
+    def said(self) -> dict:
+        return json.loads((self.dir / "said.json").read_text())
+
+    def status(self) -> dict:
+        return json.loads((self.dir / "status.json").read_text())
+
+    def alarms(self) -> list:
+        return [(minutes, event) for minutes, event, _ in self.raised]
+
+    def test_a_pass_out_of_its_time_ends_with_code_0_says_how_far_it_read_and_is_no_failed_pass(self):
+        self.assertEqual(self.run_pass(pr.Behind(5_000, 90_000)), 0)
+        self.assertEqual(self.raised, [], "no review_failed, and no other alarm")
+        self.assertEqual([f for e, f in self.lines if e == "review_behind"],
+                         [{"read_to": 5_000, "head": 90_000, "since": rs.utc(self.T0),
+                           "then": "no document this pass; the next one goes on from there"}])
+        self.assertEqual(self.status(), {"at": self.T0, "behind": {"readTo": 5_000, "head": 90_000, "since": self.T0}})
+        self.assertEqual(self.said(), {"_behind": {"since": self.T0}})
+        self.assertEqual(sorted(f.name for f in self.dir.iterdir()), ["said.json", "status.json"], "no document")
+        # The next pass reads on: its own time and numbers, the same beginning.
+        self.assertEqual(self.run_pass(pr.Behind(9_000, 90_300), minutes=10), 0)
+        self.assertEqual(self.status(), {"at": self.T0 + 600, "behind": {"readTo": 9_000, "head": 90_300, "since": self.T0}})
+        self.assertEqual(self.raised, [])
+
+    def test_the_reading_itself_out_of_its_time_ends_so_through_the_services_own_wrapper(self):
+        """Nothing stood in for: the kept logs' own reading (`LogScan.read`) on a node 30 000 blocks ahead, a pass whose
+        time is over after its first step, and the wrapper `main` runs the pass in."""
+        from ops.tests.test_payout_review import USDC, addr
+        node = lambda method, params=(): {"eth_chainId": hex(998), "eth_blockNumber": hex(30_010),  # noqa: E731
+                                          "eth_getBlockByNumber": {"timestamp": "0x1"}}.get(method, [])
+        code = self.run_pass(None, record={"SimPoolFactory": addr(0xFA), "usdc": USDC, "block": 10},
+                             rpc=(pr.c, "rpc", node), view=(pr.core, "view", lambda *a, **k: [POOL]),
+                             budget=(rs, "PASS_BUDGET_S", -1))
+        self.assertEqual(code, 0)
+        read_to = 10 + pr.SCAN_STEP - 1
+        self.assertEqual(self.status(), {"at": self.T0, "behind": {"readTo": read_to, "head": 30_010, "since": self.T0}})
+        self.assertEqual([(f["read_to"], f["head"]) for e, f in self.lines if e == "review_behind"], [(read_to, 30_010)])
+        self.assertEqual(json.loads((self.dir / "scan.json").read_text())["scannedTo"], read_to, "what it read is saved")
+        self.assertEqual(sorted(f.name for f in self.dir.iterdir()), ["said.json", "scan.json", "status.json"], "no document")
+        self.assertEqual(self.raised, [])
+
+    def test_over_an_hour_of_it_is_an_alarm_said_again_every_hour_and_only_once_the_channel_took_it(self):
+        for k in range(7):  # the passes of an hour, the seventh sixty minutes after the first
+            self.assertEqual(self.run_pass(pr.Behind(1_000 * (k + 1), 90_000), minutes=10 * k), 0)
+        self.assertEqual(self.raised, [], "an hour of it and not a second more: nothing yet")
+        self.took = False
+        self.assertEqual(self.run_pass(pr.Behind(8_000, 90_000), minutes=70), 0)
+        self.assertEqual(self.alarms(), [(70, "review_behind_long")])
+        fields = self.raised[0][2]
+        self.assertEqual((fields["read_to"], fields["head"], fields["since"]), (8_000, 90_000, rs.utc(self.T0)))
+        self.assertIn("no document is fresh", fields["why"])
+        self.took = True
+        self.run_pass(pr.Behind(9_000, 90_000), minutes=80)
+        self.assertEqual(self.alarms()[1:], [(80, "review_behind_long")], "the channel did not take it: said at the next pass")
+        for minutes in range(90, 140, 10):
+            self.run_pass(pr.Behind(9_500, 90_000), minutes=minutes)
+        self.assertEqual(len(self.raised), 2, "not at every pass")
+        self.run_pass(pr.Behind(9_900, 90_000), minutes=140)
+        self.assertEqual(self.alarms()[2:], [(140, "review_behind_long")], "an hour after the channel last took it")
+        self.assertEqual(self.said()["_behind"], {"since": self.T0, "said": self.T0 + 140 * 60})
+
+    def test_a_failed_pass_between_them_does_not_end_the_row_and_a_pass_that_reads_to_the_head_does(self):
+        for k in range(4):
+            self.run_pass(pr.Behind(1_000, 90_000), minutes=10 * k)
+        with self.assertRaises(SystemExit) as caught:
+            self.run_pass(RuntimeError("node down"), minutes=40)
+        self.assertIn("the node failed: node down", str(caught.exception))
+        self.assertEqual(self.alarms(), [(40, "review_failed")], "a failure of the node is one, as before")
+        self.assertEqual(self.said()["_behind"], {"since": self.T0})
+        self.assertEqual(self.status()["at"], self.T0 + 30 * 60, "and a failed pass writes no end of its own")
+        for minutes in (50, 60):
+            self.run_pass(pr.Behind(2_000, 90_000), minutes=minutes)
+        self.assertEqual(len(self.raised), 1)
+        self.run_pass(pr.Behind(3_000, 90_000), minutes=70)
+        self.assertEqual(self.alarms()[1:], [(70, "review_behind_long")], "over an hour since the first, a failed pass among them")
+        # A pass that reads to the head ends the row: nothing of it is kept, and a later one starts its own hour.
+        ch, _, _ = honest_world()
+        self.assertEqual(self.run_pass(ch.d, minutes=80), 0)
+        self.assertEqual(self.said(), {f"{POOL}-0": None})
+        self.assertNotIn("behind", self.status())
+        for minutes in range(90, 160, 10):
+            self.run_pass(pr.Behind(4_000, 91_000), minutes=minutes)
+        self.assertEqual(self.status()["behind"], {"readTo": 4_000, "head": 91_000, "since": self.T0 + 90 * 60})
+        self.assertEqual(len(self.raised), 2, "an hour of the new row is not over")
+        self.run_pass(pr.Behind(5_000, 91_000), minutes=160)
+        self.assertEqual(self.alarms()[2:], [(160, "review_behind_long")])
+
+    def test_it_writes_no_document_and_those_there_carry_no_approval_past_their_own_hour(self):
+        """While the reading is not at the head nothing new is known of any payout: no document is written, none is
+        touched, and the one a pass that read to the head wrote is fresh for an hour of the chain's clock from that
+        reading, whatever the passes after it did."""
+        ch, _, _ = honest_world()
+        ch.d["chainId"] = 998
+        self.assertEqual(self.run_pass(ch.d), 0)
+        path = self.dir / f"{POOL}-0.json"
+        before, stamp = path.read_bytes(), path.stat().st_mtime_ns
+        doc, pay = json.loads(before), ch.d["payouts"][0]
+        self.assertIsNone(pr.card_problem(doc, POOL, 0, pay, 998, ch.d["latest"], ch.d["now"]), "clean, and fresh")
+        self.assertEqual((self.status()["due"], self.status()["held"]), (1, 0))
+        for k in range(1, 8):
+            self.assertEqual(self.run_pass(pr.Behind(1_000 * k, 90_000), minutes=10 * k), 0)
+            self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (before, stamp), "not written again")
+        self.assertEqual(sorted(f.name for f in self.dir.iterdir()), [path.name, "said.json", "status.json"])
+        self.assertEqual(self.status(), {"at": self.T0 + 70 * 60, "due": 1, "held": 0,
+                                         "behind": {"readTo": 7_000, "head": 90_000, "since": self.T0 + 600}})
+        late = pr.card_problem(doc, POOL, 0, pay, 998, ch.d["latest"], ch.d["now"] + 70 * 60)
+        self.assertIn("review it again", late, "seventy minutes of passes that read no further renewed nothing")
+
+    def test_a_pass_that_fell_behind_says_nothing_of_the_second_journals_reading(self):
+        """The journals are read after the chain: a pass that did not get there read none, and what was last said of
+        the second one's reading stays as it was (taken for read whole, its alarm would be said anew after each)."""
+        rs.save_said(self.dir / "said.json", {"_second_unread": self.T0 - 600})
+        self.assertEqual(self.run_pass(pr.Behind(5_000, 90_000)), 0)
+        self.assertEqual(self.said(), {"_second_unread": self.T0 - 600, "_behind": {"since": self.T0}})
 
 
 class Units(unittest.TestCase):

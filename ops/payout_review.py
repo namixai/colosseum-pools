@@ -3218,7 +3218,12 @@ SCAN_SCHEMA = "payout-review-scan/2"  # /2: each transfer keeps its log's index,
 
 
 class Behind(RuntimeError):
-    """The pass read and saved part of the chain and ran out of its time: the next one goes on from there."""
+    """The pass read and saved part of the chain and ran out of its time: the next one goes on from there. No failure
+    of the node or of the pass: `read_to` is the last block read and saved, `head` the chain's when the pass began."""
+
+    def __init__(self, read_to: int, head: int):
+        super().__init__(f"read to block {read_to} of {head}: the next pass goes on from there")
+        self.read_to, self.head = read_to, head
 
 
 class LogScan:
@@ -3317,7 +3322,7 @@ class LogScan:
                 unsaved = 0
             if until is not None and time.monotonic() > until and hi < latest:
                 self.save()
-                raise Behind(f"read to block {hi} of {latest}: the next pass goes on from there")
+                raise Behind(hi, latest)
 
     def links_read(self, trader: str) -> bool:
         """Whether the trader's incoming USDC is read from the deployment's block on (`read_links`)."""

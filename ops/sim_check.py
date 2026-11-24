@@ -121,12 +121,15 @@ def quiet(exc, limit: int | None = 200) -> str:
 
 
 @contextlib.contextmanager
-def node_errors():
+def node_errors(*no_failure):
     """A failure of the node ends the program in one line with no node address in it, never a traceback that prints
-    the address (and its key) with the exception."""
+    the address (and its key) with the exception. An exception of a kind named in `no_failure` is none (the review's
+    `Behind`: a pass out of its time, which the next one goes on from): it passes as it is, for the caller to take."""
     try:
         yield
     except SystemExit:
+        raise
+    except no_failure:
         raise
     except Exception as exc:
         raise SystemExit(f"refusing to go on: the node failed: {quiet(exc)}") from None

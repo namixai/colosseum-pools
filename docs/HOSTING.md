@@ -957,7 +957,11 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   buyers' funding is not read to the end and how many blocks are left for them, numbers only; the index's public
   health route takes the time of the pass from this file and nothing else), which the stops' loop in the
   keeper's process watches (`COLOSSEUM_REVIEW_STATUS` in the keeper's unit): older than 30 minutes with payouts
-  waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts;
+  waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts. A pass
+  that ran out of its time before it read to the head writes its end too: its time, `behind` (the block it read to,
+  the head, and `since`, the end of the first such pass in a row) and the payouts waiting and held as the last pass
+  that read to the head counted them. The review runs and is catching up, so the watch of the file's age says
+  nothing; a pass that reads to the head writes the file without `behind`;
 - `said.json` and `ALARM`: the alarms raised, each remembered only once the channel took it.
 
 Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
@@ -974,7 +978,12 @@ journal longer than 64 KB, nested past the parser's depth, with `Infinity` or `N
 that is not whole where the block, its time or a price stands (`7.9` is not taken as 7) is a bad line: its
 block is not in that journal. A second journal whose reading fails in any other way is `second_journal_unread`
 (every 6 hours while it lasts): the pass goes on and writes its documents, and the stops standing in the blocks that
-journal did not give are held as resting on one journal. A pass that fails is `review_failed` (once an hour); a pass killed by its
+journal did not give are held as resting on one journal. A pass that runs out of its time (420 seconds) before it has
+read to the head is no failure: it saves what it read, says `review_behind` in its journal with the block it read to
+and the head, writes no document (those there keep their own hour, and `approve` refuses them past it) and ends with
+code 0, so neither `review_failed` nor `unit_failed` is said; the next pass goes on from there, as the first passes
+over a long history do. Passes that end so for over an hour with none between them that read to the head are
+`review_behind_long`, said again every hour while it lasts (a pass that fails among them does not end the row). A pass that fails is `review_failed` (once an hour); a pass killed by its
 `TimeoutStartSec` or its `MemoryMax` (1 GB; the journals are read line by line and only the blocks of the stops'
 time are kept, about 6 MB a day of two journals of three assets) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read

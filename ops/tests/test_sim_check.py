@@ -924,6 +924,35 @@ class NoKeyOfTheNodeInALine(unittest.TestCase):
         self.assertEqual(lines[-1]["error"], sig)
 
 
+class WhatIsNoFailureOfTheNode(unittest.TestCase):
+    """`node_errors` ends the program on anything the node raised, in one line without its address. What its caller
+    names as no failure (the review's pass out of its time) is not ended so: it passes as it is, for the caller."""
+
+    class Later(RuntimeError):
+        pass
+
+    def test_what_is_named_passes_as_it_is_and_everything_else_ends_the_program_without_the_address(self):
+        Later = self.Later
+        with self.assertRaises(Later) as passed:
+            with s.node_errors(Later):
+                raise Later("read to block 5 of 9")
+        self.assertEqual(str(passed.exception), "read to block 5 of 9")
+        for named in ((), (Later,), (Later, KeyError)):
+            with self.assertRaises(SystemExit) as caught:
+                with s.node_errors(*named):
+                    raise RuntimeError("403 Client Error: Forbidden for url: https://rpc.example.org/v2/SECRETKEY123")
+            self.assertIn("refusing to go on: the node failed: 403", str(caught.exception))
+            self.assertNotIn("SECRETKEY123", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            with s.node_errors():
+                raise Later("not named here: a failure like any other")
+        self.assertIn("the node failed", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            with s.node_errors(Later):
+                raise SystemExit("refusing on its own")
+        self.assertEqual(str(caught.exception), "refusing on its own")
+
+
 class ThePace(unittest.TestCase):
     def test_reads_are_spaced_by_the_gap_from_the_end_of_the_last(self):
         clock = [100.0]
