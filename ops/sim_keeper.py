@@ -61,9 +61,11 @@ import argparse
 import json
 import pathlib
 import queue
+import re
 import sys
 import time
 
+import requests
 from eth_abi import decode as abi_decode
 from eth_utils import keccak, to_checksum_address
 
@@ -227,6 +229,9 @@ BATCH = 100
 NUMBERING_EVERY_S = 600.0
 # How often a process says it is alive, with the requests it made since by method (`keeper_alive`).
 ALIVE_EVERY_S = 60.0
+# Seconds the fast loop may wait with no step handed in by the stops' loop before it is an alarm (`fed_step`): it
+# fills the orders from those steps alone, so while none comes no order is filled.
+UNFED_S = 30.0
 
 
 def has_multicall(call) -> bool:
@@ -457,6 +462,101 @@ class Reads:
         return c.call_view(to, sig, types, args, out)
 
 
+# ── eth_getLogs in the windows a node takes ──────────────────────────────────────────
+
+# A window narrowed by a node's refusal is tried at its full width again this long after: a node whose plan changed,
+# or a refusal that was not about the width after all, costs one slower catch-up an hour at most.
+LOG_WINDOW_RETRY_S = 3_600.0
+
+
+def beyond_head(text: str) -> bool:
+    """Whether a node's refusal of an eth_getLogs says the range reaches past the blocks its logs have yet: one address
+    may be several servers, and the one that answers the logs may stand a block or two behind the one that answered
+    the head (Alchemy's -32602 "block range extends beyond current head block", on testnet on 25 November 2026, on
+    about one read in seven). Not a failure, and no reason to give any block up: the blocks before it are read, and
+    the rest at the next step."""
+    t = text.lower()
+    return "head" in t and any(w in t for w in ("beyond", "ahead of", "past the", "greater than"))
+
+
+# A refusal that speaks of the width (a range, a limit, too many blocks or results), or an HTTP 4xx with no words
+# (Alchemy's free plan answers 400): the narrower window that the node took after it is the node's, and is kept.
+# Any other error (a server's -32603, say) narrows that one read and teaches nothing.
+WIDTH_WORDS = re.compile(r"range|limit|exceed|too (?:many|large|big|wide)|more than|max|http 4\d\d|client error",
+                         re.IGNORECASE)
+
+
+def named_width(text: str, refused: int) -> int | None:
+    """The width of blocks a refusal names, when it names one narrower than the one refused (Alchemy's free plan: "up
+    to a 10 block range", 25 November 2026); None when it names none."""
+    for m in re.finditer(r"(\d[\d,]*)[\s-]*blocks?\b", text, re.IGNORECASE):
+        n = int(m.group(1).replace(",", ""))
+        if 1 <= n < refused:
+            return n
+    return None
+
+
+class LogWindow:
+    """eth_getLogs of a span of blocks, in windows of a width the node takes, learned from its refusals: no node's
+    limit is written into the code (HyperEVM's own nodes take 50 blocks, Alchemy's free plan 10, others 1 000).
+
+    A window the node refuses is narrowed, to the width the refusal names or else to half, down to one block: no answer
+    of the node's holds the read on one range for good. A refusal that speaks of the width (`WIDTH_WORDS`) teaches it:
+    the width found is kept for the next reads (`width`) and tried at full again `LOG_WINDOW_RETRY_S` later; any other
+    narrows that one read only. A refusal of a single block is no refusal of a width: it is raised as it came, and
+    the width this read learned on the way down to it is put back. A range
+    the node says reaches past its head (`beyond_head`) is read up to the block before: the read returns how far it
+    got, and the caller reads the rest next time; nothing is skipped. `passes`: the errors raised as they come (a busy
+    node, one never reached), which a narrower window would not mend; `unsure`: the ones that teach nothing whatever
+    they say (a timeout, a server's error), as they may pass by themselves."""
+
+    def __init__(self, width: int = MAX_LOG_WINDOW, say=None, clock=time.monotonic):
+        self.full = max(1, int(width))
+        self.width = self.full
+        self.narrowed_at: float | None = None
+        self.short = 0  # reads the node's logs ended in before their last block, since last taken (`taken_short`)
+        self.say = say or log
+        self.clock = clock
+
+    def taken_short(self) -> int:
+        short, self.short = self.short, 0
+        return short
+
+    def read(self, call, query: dict, lo: int, hi: int, passes: tuple = (), unsure: tuple = ()) -> tuple[list[dict], int]:
+        """The logs `query` (its addresses and topics) asks for in blocks `lo` to `hi`, and the last block they were
+        read to: `hi`, or less when the node's logs end before it."""
+        if self.narrowed_at is not None and self.clock() - self.narrowed_at >= LOG_WINDOW_RETRY_S:
+            self.width, self.narrowed_at = self.full, None
+        out: list[dict] = []
+        start, top, cap = lo, hi, self.width
+        learned = (self.width, self.narrowed_at)  # put back if one block is refused all the same: not the width, then
+        while start <= top:
+            end = min(top, start + cap - 1)
+            try:
+                got = call("eth_getLogs", [{**query, "fromBlock": hex(start), "toBlock": hex(end)}])
+            except passes:
+                raise
+            except Exception as exc:
+                text = str(exc)
+                if beyond_head(text):
+                    self.short += 1
+                    top, cap = end - 1, max(1, (end - start + 1) // 2)
+                    continue
+                if end == start or "rate limit" in text.lower():
+                    if end == start:
+                        self.width, self.narrowed_at = learned
+                    raise
+                cap = named_width(text, end - start + 1) or (end - start + 1) // 2
+                if cap < self.width and not isinstance(exc, unsure) and WIDTH_WORDS.search(text):
+                    self.say("logs_window_narrowed", was=self.width, now=cap, error=refused(exc),
+                             then=f"kept, and {int(self.full)} tried again in an hour")
+                    self.width, self.narrowed_at = cap, self.clock()
+                continue
+            out += got
+            start, cap = end + 1, self.width
+        return out, start - 1
+
+
 # ── the keeper ───────────────────────────────────────────────────────────────────────
 
 class SimKeeper:
@@ -487,6 +587,11 @@ class SimKeeper:
         # tries them and each send is c.send_tx's.
         self.stop_loop = None
         self.outbox = None
+        # The fast loop's own eth_getLogs (the blocks before the first step the stops' loop hands in, those it skipped,
+        # and an account sold in them), in windows the keeper's node takes (`LogWindow`).
+        self.logs = LogWindow(MAX_LOG_WINDOW)
+        self.fed_at: float | None = None  # when the stops' loop last handed a step in (`fed_step`)
+        self.unfed_said = False
         # With Multicall3 on the chain (`main` looks at the start) the slow pass asks its reads in batches (`Reads`);
         # without, and until the node's numbering is measured, each is asked alone as before.
         self.multicall = False
@@ -795,8 +900,8 @@ class SimKeeper:
             new: list[str] = []
             # Handed in from block `fed[0]` on: only the blocks before it are asked for here, and none when there are none.
             own = latest if fed is None else min(latest, fed[0] - 1)
-            for l in (c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED, *TRIGGER_TOPICS]],
-                                             "fromBlock": hex(lo), "toBlock": hex(own)}]) if lo <= own else []):
+            for l in (self._own_logs({"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED, *TRIGGER_TOPICS]]}, lo, own)
+                      if lo <= own else []):
                 if l["topics"][0] == PLACED:
                     self._order(l)
                     continue
@@ -810,8 +915,7 @@ class SimKeeper:
                     new.append(a)
             if new:  # their orders in the same blocks, which the read above could not name
                 # Up to the head, the blocks handed in too: the stops' loop read those without knowing the account.
-                for l in c.rpc("eth_getLogs", [{"address": new, "topics": [[PLACED, *TRIGGER_TOPICS]],
-                                                "fromBlock": hex(lo), "toBlock": hex(latest)}]):
+                for l in self._own_logs({"address": new, "topics": [[PLACED, *TRIGGER_TOPICS]]}, lo, latest):
                     self._trigger(l) if l["topics"][0] in TRIGGER_TOPICS else self._order(l)
             for l in sorted((l for l in (fed[1] if fed is not None else []) if lo <= int(l["blockNumber"], 16) <= latest),
                             key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
@@ -840,17 +944,25 @@ class SimKeeper:
     def fed_step(self, wait: float) -> list[str]:
         """With the stops' loop: its looks at the head and its one read of each block's logs serve this loop too. Waits
         up to `wait` seconds for its next step, takes every step handed in since, and makes one fast step to the last
-        head with their logs: no look at the head and no eth_getLogs of this loop's own."""
+        head with their logs: no look at the head and no eth_getLogs of this loop's own. None handed in for `UNFED_S`
+        is an alarm (`_unfed`): this loop stands with that one."""
         feed = self.stop_loop.feed
+        if self.fed_at is None:
+            self.fed_at = time.monotonic()
         try:
             steps = [feed.get(timeout=wait)]
         except queue.Empty:
+            self._unfed()
             return []
         while True:
             try:
                 steps.append(feed.get_nowait())
             except queue.Empty:
                 break
+        self.fed_at = time.monotonic()
+        if self.unfed_said:
+            self.unfed_said = False
+            log("keeper_fed_again", block=self.fast_block, head=steps[-1][1])
         lo, head, logs = steps[-1][0], steps[-1][1], list(steps[-1][2])
         if head <= self.fast_block:
             return []
@@ -861,6 +973,28 @@ class SimKeeper:
                 break
             lo, logs = min(lo, first), list(more) + logs
         return self.fast_step(head, fed=(lo, logs))
+
+    def _unfed(self) -> None:
+        """No step handed in for `UNFED_S`: an alarm once, through the stops' loop's, until one comes. The fast loop then
+        stands with it, and an order placed meanwhile waits unfilled: the stops' loop's own alarms say why it stands
+        (its node failing, behind), this one says the orders stand too, never in silence."""
+        waited = time.monotonic() - self.fed_at
+        if self.unfed_said or waited < UNFED_S:
+            return
+        self.unfed_said = True
+        self.stop_loop.alarm("keeper_unfed", seconds=int(waited), block=self.fast_block, orders=len(self.orders),
+                             why="the fast loop takes its blocks from the stops' loop, and none came: no order is filled "
+                                 "until one does (see the stops' loop's own alarms)")
+
+    def _own_logs(self, query: dict, lo: int, hi: int) -> list[dict]:
+        """The fast loop's own read of blocks `lo` to `hi`, in windows the keeper's node takes (`LogWindow`): the
+        blocks before the stops' loop's first step after a start are fifty, which a node of a narrower limit refuses
+        in one read, and the fast loop would stand on them for good. A read the node's logs ended in before `hi`
+        raises, and the next step reads it again from `lo`: the fast loop's block moves only with every block read."""
+        got, top = self.logs.read(c.rpc, query, lo, hi, passes=(requests.ConnectionError,), unsure=(requests.Timeout,))
+        if top < hi:
+            raise RuntimeError(f"eth_getLogs: the node's logs end at block {top}, before {hi}; read again next time")
+        return got
 
     def trigger_step(self, latest: int) -> list[str]:
         """The stops and takes armed for the next block: each is tried, once a block, by a call that changes

@@ -721,14 +721,20 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   at the start, twice and taken when the two agree, and its number counted back. A look that gives a reason to
   doubt its number (a block seen before with another time, a new one with the last look's time, blocks skipped),
   and any look once a minute, is held against the node's own record of its block; one that does not hold makes no
-  step by its number: the numbering is measured again at once and that look is the head and a call a price. A price
+  step by its number: the numbering is measured again at once and that look is the head and a call a price (a
+  measure that fails is tried again ten seconds on, not at every look, and the looks between are made that way;
+  the first look after a start is held against the node's record too). A price
   read in the call after one that failed (and may have burned its gas) is asked again alone. If the call fails
   whole, that one look is the head and then a call a price, as before; without Multicall3 on the chain every look
   is (and on mainnet the loop does not start);
 - every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the
   fills that move a position, exams sold and ended), and the comparison made by the loop itself, not one `eth_call`
   a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
-  to the keeper's fast loop, which asks the node for no head and no logs of its own;
+  to the keeper's fast loop, which asks the node for no head and no logs of its own. The read goes in the width the
+  node takes: 50 blocks at most, and a node that takes fewer (Alchemy's free plan takes 10) says so by refusing, the
+  window is narrowed, down to one block, and the width it took is kept (tried at 50 again an hour on). It goes as
+  far as the node's logs reach: a node whose logs stand a block or two behind its head is read to there and the rest
+  at the next step, which is no failure, and no block is ever skipped;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);
@@ -770,13 +776,20 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
 - the keeper's loop checks that the thread is there and moving: one that ended is an alarm and is started again,
   one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds (one alarm an
   hour at most, the episodes between said as lines) and 30 blocks without prices while a stop stands. An alarm's own
-  reads (whether the exam was over) are made after the step's stops went out. A line `stop_loop_alive` every minute
-  says it works, with the requests it asked of its node since the last, by method (`keeper_alive` is the keeper's own).
+  reads (whether the exam was over) are made after the step's stops went out. An alarm of the loop's health that
+  its cause raises again at each step (`stop_watch_lost`, `stop_watch_gap`, `stop_watch_blind_long`,
+  `stop_numbering_changed`, `stop_loop_dead`) is raised once in ten minutes at most, the next one saying how many
+  were not; a stop's own alarms are each raised. The keeper's fast loop takes its blocks from this loop alone, and
+  says so when none came for 30 seconds (`keeper_unfed`): no order is filled meanwhile. A line `stop_loop_alive`
+  every minute says it works, with the requests it asked of its node since the last, by method, the width of
+  `eth_getLogs` the node takes and the steps its logs ended short of the head in (`keeper_alive` is the keeper's own).
 
-Three settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
+Four settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
 loop reads through and the key's transactions go to, the keeper's own when empty; `--stop-tip-gwei`
-(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty; and `--stop-poll`
-(COLOSSEUM_STOP_POLL), the seconds between two looks at the head, half a second when empty. On mainnet the stops'
+(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty; `--stop-poll`
+(COLOSSEUM_STOP_POLL), the seconds between two looks at the head, half a second when empty; and `--stop-log-window`
+(COLOSSEUM_STOP_LOG_WINDOW), the widest `eth_getLogs` asked for, 50 blocks when empty, which a node that takes
+fewer does not need: its refusal teaches the loop its width. On mainnet the stops'
 node must not be the gateway's, as the keeper's must not. What all of it asks of a node is counted in
 docs/HOSTING.md.
 

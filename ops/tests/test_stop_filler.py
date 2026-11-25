@@ -526,8 +526,9 @@ class NoBlindSpots(Base):
         self.assertEqual(sent, [(EXAM, BTC, False)])
         # The blocks BTC's price was read at, alone (a call a price) or in the block's one call: the same order.
         self.assertEqual(self.node.price_reads(), [100, 103, 101, 102], "the head's price first, then the blocks between")
-        self.assertLess([m for m, _ in self.node.calls].index("eth_sendRawTransaction"),
-                        [m for m, _ in self.node.calls].index("eth_getLogs", 2), "sent before the read back")
+        methods = [m for m, _ in self.node.calls]
+        self.assertLess(methods.index("eth_sendRawTransaction"), methods.index("eth_getLogs", methods.index("eth_getLogs") + 1),
+                        "sent before the read back")
         short = self.events("stop_reach_too_short")
         self.assertEqual((short[0]["reached_from"], short[0]["reached_to"]), (101, 101),
                          "the reach of block 101, read back, ended in 102 with no fill")
@@ -561,8 +562,9 @@ class NoBlindSpots(Base):
         self.keeper.accounts, self.keeper.pools = {}, []
         loop = self.loop()
         self.run_to(loop, 100, 101)
-        # With Multicall3 the look at the head is its one call, the platform's prices in it; nothing else either way.
-        self.assertEqual({m for m, _ in self.node.calls}, {"eth_call"} if self.MULTICALL else set())
+        # With Multicall3 the look at the head is its one call, the platform's prices in it, and the first look of a start
+        # held against the node's record of its block (review 20 of #342, L1); nothing else either way.
+        self.assertEqual([m for m, _ in self.node.calls], ["eth_call", "eth_getBlockByNumber", "eth_call"] if self.MULTICALL else [])
         self.assertEqual([tag for tag, _ in self.node.batches()], ["latest", "latest"] if self.MULTICALL else [])
         self.assertEqual(loop.block, 101)
 
@@ -1750,9 +1752,10 @@ class TheOneCall(Base):
             self.assertEqual(journal.px[BTC], lines, how)
             self.assertEqual(journal.times, {b: self.node.time_of(b) for b in lines}, "each line's time by its own call")
             self.assertEqual({m for m, _ in self.node.calls} - {"eth_getBlockByNumber"}, {"eth_call", "eth_getLogs"})
-            self.assertEqual([p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"], [hex(103)],
-                             "no block asked for apart but the head's, by its number: a look that skips blocks is held "
-                             "against the node's record of its block (review 20 of #342)")
+            self.assertEqual([p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"], [hex(100), hex(103)],
+                             "no block asked for apart but the heads', by their numbers: the first look of a start, and "
+                             "a look that skips blocks, are held against the node's record of their block (review 20 "
+                             "of #342, and its L1)")
             if how == "honest":
                 # The first block read back is taken once the node's answers by number hold against the look at 100.
                 self.assertEqual(self.node.batches()[-4:], [("latest", 3), (hex(101), 3), (hex(100), 3), (hex(102), 3)])
@@ -1921,8 +1924,9 @@ class TheNodesNumbering(Base):
             loop._served = lambda until, s: stop.set()
             loop.run(0.01, stop)
             self.assertEqual(loop.ahead, ahead)
-            self.assertEqual([m for m, _ in self.node.calls], MEASURE + ["eth_call", "eth_getLogs"],
-                             "measured once, then the look and its logs")
+            self.assertEqual([m for m, _ in self.node.calls], MEASURE + ["eth_call", "eth_getBlockByNumber", "eth_getLogs"],
+                             "measured once, then the look, held against the node's record of its block as the first "
+                             "of a start (review 20 of #342, L1), and its logs")
             logs = [p[0] for m, p in self.node.calls if m == "eth_getLogs"][0]
             self.assertEqual((logs["fromBlock"], logs["toBlock"]), (hex(100), hex(100)), "the head, not the block to come")
             journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
@@ -1970,18 +1974,20 @@ class TheNodesNumbering(Base):
     def test_with_the_numbering_not_measured_the_look_is_made_the_old_way_and_measured_again_at_the_next(self):
         """The measure cannot be made (its call fails, or the head moves at each try). The loop does not stand still
         for it, nor the keeper's fast loop behind it: the look is the head and a call a price, a block missed
-        meanwhile is a gap, and the measure is tried again at the next look."""
+        meanwhile is a gap, and the measure is tried again once NUMBERING_RETRY_S have gone by, not at every look
+        (review 20 of #342, L3: up to 24 requests a look, 577 then 1 141 a minute on testnet on 25 November 2026)."""
         self.node.ahead = 1
         loop = self.loop(wallet=None)
         loop.ahead = None
         feed = loop.share()
         self.node.price.update({100: 4_242, 102: 4_343})
-        with mock.patch.object(sk, "numbering", side_effect=RuntimeError("eth_call: {'code': -32000, 'message': 'x'}")):
+        with mock.patch.object(sk, "numbering", side_effect=RuntimeError("eth_call: {'code': -32000, 'message': 'x'}")) as measure:
             self.run_to(loop, 100)
             self.assertEqual([m for m, _ in self.node.calls], ["eth_getBlockByNumber", "eth_call", "eth_call", "eth_call",
                                                                "eth_getLogs"], "the head, a call a price, the logs")
             self.assertEqual(self.node.batches(), [])
             self.run_to(loop, 102)
+            self.assertEqual(measure.call_count, 1, "not measured again at the next look, a moment later")
         journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
         self.assertEqual(journal.px[BTC], {100: 4_242, 102: 4_343}, "the head's own number, not the call's next one")
         self.assertEqual([(lo, hi) for lo, hi, _ in journal.gaps], [(101, 101)])
@@ -1989,10 +1995,37 @@ class TheNodesNumbering(Base):
         self.assertEqual([feed.get_nowait()[:2], feed.get_nowait()[:2]], [(100, 100), (101, 102)], "the steps go on")
         self.assertEqual(len(self.events("stop_numbering_unread")), 1, "said once in a while, not at every look")
         self.assertIsNone(loop.ahead)
+        loop.measure_failed_at -= sf.NUMBERING_RETRY_S
         before = len(self.node.calls)
         self.run_to(loop, 103)
-        self.assertEqual(loop.ahead, 1, "measured at the next look")
-        self.assertEqual([m for m, _ in self.node.calls[before:]], MEASURE + ["eth_call", "eth_getLogs"])
+        self.assertEqual(loop.ahead, 1, f"measured at the first look {sf.NUMBERING_RETRY_S:g} seconds on")
+        self.assertEqual([m for m, _ in self.node.calls[before:]], MEASURE + ["eth_call", "eth_getBlockByNumber", "eth_getLogs"],
+                         "the first look by the measure held against the node's record of its block (L1)")
+
+    def test_a_node_that_cannot_be_measured_is_measured_once_in_a_while_and_not_at_every_look(self):
+        """A node whose servers stand at different heights answers a block it does not have yet by its number with
+        -32603 "invalid block height" (testnet, 25 November 2026): the measure fails. Tried again at every look it cost
+        up to 24 requests a look, and the loop went from about 191 requests a minute to 577, then 1 141."""
+        loop = self.loop(wallet=None)
+        loop.ahead = None
+        real = self.node.call
+
+        def call(method, params=()):
+            if method == "eth_getBlockByNumber" and params[0] != "latest":
+                self.node.calls.append((method, params))
+                raise RuntimeError("eth_getBlockByNumber: {'code': -32603, 'message': 'invalid block height'}")
+            return real(method, params)
+
+        with mock.patch.object(self.node, "call", side_effect=call):
+            self.run_to(loop, *range(100, 120))
+            measured = lambda: sum(1 for m, _ in self.node.calls if m == "eth_blockNumber") // 2  # noqa: E731
+            self.assertEqual(measured(), 1, "one measure at the first look, none at the next nineteen")
+            loop.measure_failed_at -= sf.NUMBERING_RETRY_S
+            self.run_to(loop, 120)
+            self.assertEqual(measured(), 2, f"again {sf.NUMBERING_RETRY_S:g} seconds on")
+        self.assertIsNone(loop.ahead)
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual(sorted(journal.px[BTC]), list(range(100, 121)), "every look the old way meanwhile, a line a block")
 
     def test_a_busy_node_at_the_measure_costs_the_look_and_is_not_asked_the_old_way(self):
         loop = self.loop(wallet=None)
@@ -2435,6 +2468,315 @@ class TheStart(Base):
         started = self.events("stop_loop_started")[0]
         self.assertEqual((started["poll"], started["looks_a_minute"], started["one_call"]), (0.5, 120, True))
         self.assertEqual(started["node"], "http://127.0.0.1:9")
+
+    def test_the_widest_read_of_logs_is_a_setting_and_not_needed(self):
+        import argparse
+        import os
+
+        def parse(argv, env):
+            p = argparse.ArgumentParser()
+            with mock.patch.dict("os.environ", env):
+                if "COLOSSEUM_STOP_LOG_WINDOW" not in env:
+                    os.environ.pop("COLOSSEUM_STOP_LOG_WINDOW", None)
+                sf.add_args(p)
+                return p.parse_args(argv)
+
+        self.assertEqual(parse([], {}).stop_log_window, sf.LOG_WINDOW)
+        self.assertEqual(parse([], {"COLOSSEUM_STOP_LOG_WINDOW": "10"}).stop_log_window, 10)
+        self.assertEqual(parse(["--stop-log-window", "1000"], {"COLOSSEUM_STOP_LOG_WINDOW": "10"}).stop_log_window, 1000)
+        with mock.patch.object(sf, "Node", return_value=self.node):
+            loop = sf.build(self.args(stop_log_window=10), Keeper(), self.dir / "a" / "multi-sim1.json")
+            loop.journal.close()
+            self.assertEqual((loop.logs.full, loop.logs.width), (10, 10))
+            loop = sf.build(self.args(), Keeper(), self.dir / "b" / "multi-sim1.json")
+            loop.journal.close()
+            self.assertEqual(loop.logs.width, sf.LOG_WINDOW, "not a setting of this caller's: the default")
+            with self.assertRaises(SystemExit):
+                sf.build(self.args(stop_log_window=0), Keeper(), self.dir / "c" / "multi-sim1.json")
+
+
+class LimitedNode(Node):
+    """A node of narrower ways than HyperEVM's own, as Alchemy's free plan was on testnet on 25 November 2026: its
+    eth_getLogs takes at most `limit` blocks and refuses a wider range with HTTP 400, naming the width it takes or not
+    (`named`); and its logs may stand `lag` blocks behind the head its calls answer at, a range past them refused with
+    -32602."""
+
+    def __init__(self, limit: int = 10, lag: int = 0, named: bool = True):
+        super().__init__()
+        self.limit, self.lag, self.named = limit, lag, named
+        self.log_reads: list[tuple[int, int, str]] = []  # each eth_getLogs: its first and last block, and its answer
+
+    def call(self, method, params=()):
+        if method == "eth_getLogs":
+            lo, hi = int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)
+            if hi > self.head - self.lag:
+                self.refused(method, params, lo, hi, "past its head",
+                             "eth_getLogs: {'code': -32602, 'message': 'block range extends beyond current head block'}")
+            if hi - lo + 1 > self.limit:
+                said = (f": Under the Free tier plan, you can make eth_getLogs requests with up to a {self.limit} block "
+                        f"range. Based on your parameters, this block range should work: [{hex(lo)}, "
+                        f"{hex(lo + self.limit - 1)}]") if self.named else ""
+                self.refused(method, params, lo, hi, "too wide", f"eth_getLogs: HTTP 400{said}")
+            self.log_reads.append((lo, hi, "read"))
+        return super().call(method, params)
+
+    def refused(self, method, params, lo: int, hi: int, why: str, error: str):
+        self.calls.append((method, params))
+        self.counts[method] = self.counts.get(method, 0) + 1
+        self.log_reads.append((lo, hi, why))
+        raise RuntimeError(error)
+
+    def read_spans(self) -> list[tuple[int, int]]:
+        return [(lo, hi) for lo, hi, how in self.log_reads if how == "read"]
+
+    def blocks_read(self) -> list[int]:
+        """Every block of every eth_getLogs it answered, as many times as it answered for it."""
+        return sorted(b for lo, hi in self.read_spans() for b in range(lo, hi + 1))
+
+
+class TheNodesLimits(Base):
+    """A node narrower than HyperEVM's own: eth_getLogs of ten blocks at most, its logs a block or two behind the head
+    its calls answer at (Alchemy's free plan, testnet, 25 November 2026). The loop, more than ten blocks behind, asked
+    for fifty, was refused, and stood on that range for good (14:05:10, and 14:28:31 after a restart), the keeper's
+    fast loop with it. It reads in the width the node takes, as far as the node's logs reach, and gives no block up."""
+
+    def fresh(self, node: Node) -> None:
+        self.node = node
+        self.said.clear()
+        for f in self.dir.glob("prices*"):
+            f.unlink()
+        self.journal = None
+
+    def test_a_node_of_any_width_is_read_in_the_width_it_takes_and_the_width_found_is_kept(self):
+        for limit, named in ((10, True), (10, False), (3, False), (50, True), (1_000, True)):
+            with self.subTest(limit=limit, named=named):
+                self.fresh(LimitedNode(limit, named=named))
+                loop = self.loop(wallet=None)
+                self.run_to(loop, 100)
+                self.node.logs.append(set_log(160, 950_000, 161))
+                self.run_to(loop, 220)  # 120 blocks behind
+                self.assertEqual(loop.block, 220)
+                self.assertIn((EXAM, BTC, False), loop.triggers, "the stop set in block 160 is read")
+                self.assertEqual(self.node.blocks_read(), list(range(100, 221)), "every block's events read, each once")
+                self.assertTrue(all(hi - lo < limit for lo, hi in self.node.read_spans()))
+                width = loop.logs.width
+                if limit >= sf.LOG_WINDOW:
+                    self.assertEqual((width, self.events("logs_window_narrowed")), (sf.LOG_WINDOW, []), "never refused")
+                else:
+                    self.assertEqual(width, limit if named else sf.LOG_WINDOW >> len(self.events("logs_window_narrowed")),
+                                     "the width the refusal names, or half again till it is taken")
+                    self.assertLessEqual(width, limit)
+                    self.assertEqual(self.events("logs_window_narrowed")[-1]["now"], width)
+                refused = sum(1 for *_, how in self.node.log_reads if how == "too wide")
+                self.node.logs.append(set_log(280, 960_000, 281, take=True))
+                self.run_to(loop, 300)
+                self.assertEqual(sum(1 for *_, how in self.node.log_reads if how == "too wide"), refused,
+                                 "the width found is kept: refused no more")
+                self.assertIn((EXAM, BTC, True), loop.triggers)
+                self.assertEqual(self.events("stop_watch_lost"), [])
+
+    def test_a_node_whose_logs_stand_behind_its_head_is_read_as_far_as_they_reach_and_the_rest_next_time(self):
+        self.node = LimitedNode(limit=50, lag=1)
+        loop = self.loop(wallet=None)
+        feed = loop.share()
+        self.node.price.update({100: 990_000, 101: 980_000, 102: 970_000})
+        self.run_to(loop, 100)  # its logs end at 99: nothing is read, and the loop starts at block 100 all the same
+        self.assertEqual(loop.block, 99)
+        self.node.logs.append(set_log(101, 950_000, 102))
+        self.run_to(loop, 101)  # its logs end at 100
+        self.assertEqual(loop.block, 100)
+        self.assertNotIn((EXAM, BTC, False), loop.triggers, "block 101's events are not there yet")
+        self.node.lag = 0
+        self.run_to(loop, 102)
+        self.assertEqual(loop.block, 102)
+        self.assertIn((EXAM, BTC, False), loop.triggers, "the stop set in block 101 is read at the next step")
+        self.assertEqual([feed.get_nowait()[:2] for _ in range(2)], [(100, 100), (101, 102)],
+                         "handed on as read: no block twice, none left out")
+        self.assertTrue(feed.empty())
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual((journal.px[BTC], journal.gaps), ({100: 990_000, 101: 980_000, 102: 970_000}, []))
+        if self.MULTICALL:
+            self.assertEqual(self.node.price_reads(), [100, 101, 102], "each block's price read once, by its own look")
+        self.assertEqual(loop.logs.taken_short(), 2)
+        self.assertEqual(loop.logs.width, 50, "a node behind is no node of a narrower width")
+
+    def test_a_loop_far_behind_on_such_a_node_catches_up_with_no_failure_and_hands_every_block_on(self):
+        """As on testnet on 25 November 2026: 600 blocks behind, on a node of ten blocks whose logs stand a block or
+        two behind at times. Through the loop's own `run`: no look fails, no step is a failure, and every block's
+        orders are handed on to the keeper's fast loop, in order."""
+        self.node = LimitedNode(limit=10, lag=0)
+        loop = self.loop(wallet=None)
+        feed = loop.share()
+        self.run_to(loop, 100)
+        placed = ev(sk.PLACED, EXAM, 450, encode(["bool", "uint64", "uint256", "uint256"], [True, 100, 451, 455]), word(BTC))
+        self.node.logs += [placed, set_log(650, 950_000, 651)]
+        self.node.head, self.node.lag = 700, 1
+        lags = iter([0, 2, 1, 0, 1, 2, 0, 0, 1, 0] * 3)
+        looks = {"n": 0}
+
+        def served(until, stop):
+            looks["n"] += 1
+            self.node.head += 1
+            self.node.lag = next(lags)
+            if looks["n"] >= 20:
+                stop.set()
+
+        loop._served = served
+        with mock.patch.object(sf, "ALIVE_EVERY_S", 0.0):
+            loop.run(0.5, threading.Event())
+        self.assertGreaterEqual(loop.block, self.node.head - 3)
+        self.assertEqual(self.node.blocks_read(), list(range(100, loop.block + 1)), "every block's events, each once")
+        steps = []
+        while not feed.empty():
+            steps.append(feed.get_nowait())
+        self.assertEqual(steps[0][:2], (100, 100))
+        self.assertTrue(all(b[0] == a[1] + 1 for a, b in zip(steps, steps[1:])), "each step from the block after the last")
+        self.assertEqual(steps[-1][1], loop.block)
+        self.assertEqual([int(l["blockNumber"], 16) for _, _, logs in steps for l in logs], [450], "the order handed on")
+        self.assertIn((EXAM, BTC, False), loop.triggers)
+        self.assertEqual([e for e, _ in self.said if e in ("stop_loop_failed", "stop_node_busy", "stop_watch_lost")
+                          or e.startswith("stop_loop_failing")], [])
+        alive = self.events("stop_loop_alive")
+        self.assertEqual({a["log_window"] for a in alive}, {10})
+        self.assertGreater(sum(a["logs_short"] for a in alive), 0, "the steps the node's logs ended short in, said")
+
+    def test_a_fill_landed_in_a_block_whose_logs_are_not_there_yet_is_not_sent_again(self):
+        self.node = LimitedNode(limit=50)
+        loop = self.loop()
+        self.armed_stop(loop)
+        self.node.price[101] = 900_000
+        self.run_to(loop, 101)
+        self.assertEqual(len(self.node.raw), 1, "reached at 101: sent")
+        tx = loop.pending[(EXAM, BTC, False)][0]
+        # It lands in block 102, whose events the node's logs do not have yet.
+        self.node.receipts[tx] = {"status": "0x1", "blockNumber": hex(102)}
+        self.node.logs += fill_of_stop(102)
+        self.node.lag = 1
+        self.run_to(loop, 102)
+        self.assertEqual((loop.block, len(self.node.raw)), (101, 1), "not sent a second time while its fill is not read")
+        self.assertEqual(self.events("trigger_filled")[0]["block"], 102)
+        self.node.lag = 0
+        self.run_to(loop, 103)
+        self.assertNotIn((EXAM, BTC, False), loop.triggers, "its TriggerFilled read")
+        self.assertEqual((len(self.node.raw), loop.landed), (1, {}))
+
+    def test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address(self):
+        node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
+        answer = mock.Mock(status_code=400)
+        answer.json.return_value = {"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32600, "message": "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block "
+                                       "range. See http://127.0.0.1:9/v2/SECRETKEY/docs"}}
+        with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
+            node.call("eth_getLogs", [{}])
+        said = str(caught.exception)
+        self.assertTrue(said.startswith("eth_getLogs: HTTP 400: Under the Free tier plan"), said)
+        self.assertNotIn("SECRETKEY", said)
+        self.assertEqual(sk.named_width(said, 50), 10)
+        answer.json.side_effect = ValueError("not JSON")
+        with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
+            node.call("eth_getLogs", [{}])
+        self.assertEqual(str(caught.exception), "eth_getLogs: HTTP 400")
+
+
+class TheAlarmsThatComeAgain(Base):
+    """An alarm of the loop's health that its cause raises at every step is raised once in ALARM_AGAIN_S at most, the
+    ones between counted. On testnet on 25 November 2026, past its catch-up with its step failing at every look, the
+    loop wrote stop_watch_lost every second, 62 lines a minute."""
+
+    def failing_logs(self):
+        real = self.node.call
+
+        def call(method, params=()):
+            if method == "eth_getLogs":
+                self.node.calls.append((method, params))
+                raise RuntimeError("eth_getLogs: {'code': -32603, 'message': 'internal error'}")
+            return real(method, params)
+
+        return mock.patch.object(self.node, "call", side_effect=call)
+
+    def test_a_step_past_the_catch_up_that_keeps_failing_says_it_lost_the_thread_once_in_a_while(self):
+        loop = self.loop(wallet=None, backfill=3, catchup=10)
+        self.run_to(loop, 100)
+        with self.failing_logs():
+            for h in range(150, 180):
+                with self.assertRaises(RuntimeError):
+                    self.run_to(loop, h)
+        lost = self.events("stop_watch_lost")
+        self.assertEqual([a["alarm"] for a in lost], ["ALARM"], "one alarm for thirty steps")
+        flagged = [l for l in (self.dir / "stops.alarm").read_text().splitlines() if "stop_watch_lost" in l]
+        self.assertEqual(len(flagged), 1)
+        at, unraised = loop.again["stop_watch_lost"]
+        self.assertEqual(unraised, 29)
+        loop.again["stop_watch_lost"] = (at - sf.ALARM_AGAIN_S, unraised)
+        with self.failing_logs(), self.assertRaises(RuntimeError):
+            self.run_to(loop, 180)
+        lost = self.events("stop_watch_lost")
+        self.assertEqual((len(lost), lost[1]["not_raised"]), (2, 29), "the next one says how many were not raised")
+        self.assertEqual(loop.logs.width, sf.LOG_WINDOW, "an error that says nothing of the width teaches none")
+
+    def test_a_stops_own_alarms_are_each_raised_however_close_together(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.price.update({101: 900_000, 103: 1_000_000, 104: 900_000, 106: 1_000_000})
+        self.run_to(loop, 101, 102, 103, 104, 105, 106)
+        self.assertEqual([a["alarm"] for a in self.events("stop_missed")], ["ALARM", "ALARM"])
+
+    def test_a_thread_that_keeps_ending_is_an_alarm_once_in_a_while_and_started_again_each_time(self):
+        loop = self.loop(wallet=None)
+        dead = threading.Thread(target=lambda: None)
+        dead.start()
+        dead.join()
+        with mock.patch.object(sf, "start", return_value=dead) as again:
+            for _ in range(5):
+                sf.keep_alive(loop, dead, 0.5)
+        self.assertEqual(again.call_count, 5)
+        self.assertEqual(len(self.events("stop_loop_dead")), 1)
+
+
+class TheFirstLookAndTheSide(Base):
+    """Review 20 of #342, its L1 and L2."""
+
+    def test_the_first_look_of_a_start_is_held_against_the_nodes_record_and_the_next_a_moment_later_not(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100, 101)
+        asked = [p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"]
+        self.assertEqual(asked, [hex(100)] if self.MULTICALL else [])
+
+    def test_a_wrong_measure_at_the_start_loses_no_event(self):
+        """L1: measured 0 where the node numbers a call as the next block (a measure that met the coincidences it asks
+        for), the node's logs cut at its head. Unchecked for the first minute, the loop took the call's next block for
+        the head and lost the stop set in block 102."""
+        if not self.MULTICALL:
+            return  # the old way has no numbering to measure
+
+        class Clamped(Node):
+            def call(self, method, params=()):
+                out = super().call(method, params)
+                return [l for l in out if int(l["blockNumber"], 16) <= self.head] if method == "eth_getLogs" else out
+
+        self.node = Clamped()
+        self.node.ahead = 1
+        loop = self.loop(wallet=None)
+        loop.ahead = 0
+        self.run_to(loop, 100, 101)
+        self.node.logs.append(set_log(102, 950_000, 103))
+        self.run_to(loop, 102, 103, 104)
+        self.assertIn((EXAM, BTC, False), loop.triggers, "the stop set in block 102 is known")
+
+    def test_a_side_the_loop_could_not_read_in_the_reads_block_is_taken_from_the_read(self):
+        """L2: an event of block 101 moved the position, the loop's read of its side failed; the exam's read of block
+        101 says it."""
+        loop = self.loop(wallet=None)
+        self.node.logs.append(set_log(100, 950_000, 101))
+        self.run_to(loop, 100)
+        with mock.patch.object(self.node, "read", side_effect=RuntimeError("busy")):
+            loop._read_sign(EXAM, BTC, 101)
+        self.assertIsNone(loop.signs[(EXAM, BTC)])
+        loop.apply_reread(EXAM, 100, {(EXAM, BTC, False): (950_000, 101)}, {BTC: -1})
+        self.assertIsNone(loop.signs[(EXAM, BTC)], "a read of an earlier block says nothing of it")
+        loop.apply_reread(EXAM, 101, {(EXAM, BTC, False): (950_000, 101)}, {BTC: 1})
+        self.assertEqual(loop.signs[(EXAM, BTC)], 1)
+        self.assertNotIn((EXAM, BTC), loop.unread_signs)
 
 
 def the_old_way(module: dict) -> None:

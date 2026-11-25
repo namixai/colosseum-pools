@@ -1097,6 +1097,116 @@ class OneLookForBothLoops(unittest.TestCase):
         self.assertEqual(asked, [(hex(1_100 - k.MAX_LOG_WINDOW + 1), hex(1_099))])
         self.assertEqual(sk.fast_block, 1_100)
 
+    def test_on_a_node_of_ten_blocks_the_blocks_before_the_first_step_are_read_in_its_width(self):
+        """Just started, on a node whose eth_getLogs takes ten blocks (Alchemy's free plan, testnet, 25 November 2026):
+        the 49 blocks before the stops' loop's first step, asked for in one read, were refused at every step, and the
+        fast loop stood on them for good. Read in the width the node takes, the order of block 455 is filled."""
+        sk = self.keeper()
+        sk.stop_loop.feed.put((500, 500, []))
+        asked = []
+
+        def rpc(method, params):
+            lo, hi = int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)
+            asked.append((lo, hi))
+            if hi - lo + 1 > 10:
+                raise RuntimeError("eth_getLogs: HTTP 400: Under the Free tier plan, you can make eth_getLogs requests "
+                                   "with up to a 10 block range")
+            return [placed_log(self.EXAM, 501, 505, 495)] if lo <= 495 <= hi else []
+
+        with mock.patch.object(k.c, "rpc", side_effect=rpc), \
+                mock.patch.object(sk, "fill", return_value={"transactionHash": "0x01"}), \
+                mock.patch.object(k, "log"):
+            self.assertEqual(sk.fed_step(0.01), [self.EXAM])
+        read = [(lo, hi) for lo, hi in asked if hi - lo < 10]
+        self.assertEqual(sorted(b for lo, hi in read for b in range(lo, hi + 1)), list(range(451, 500)), "each block once")
+        self.assertEqual((sk.fast_block, sk.logs.width), (500, 10))
+
+    def test_no_step_handed_in_for_long_is_an_alarm_once_and_one_handed_in_again_is_said(self):
+        """The stops' loop stood (testnet, 25 November 2026), and the fast loop, which takes its blocks from it alone,
+        stood with it in silence: keeper_alive said one block for as long. Now it says so."""
+        sk = self.keeper()
+        sk.fast_block = 8
+        said = []
+        with mock.patch.object(k, "log", side_effect=lambda e, **f: said.append(e)):
+            self.assertEqual(sk.fed_step(0.01), [])
+            sk.stop_loop.alarm.assert_not_called()
+            sk.fed_at -= k.UNFED_S
+            sk.fed_step(0.01)
+            sk.fed_step(0.01)
+            sk.stop_loop.alarm.assert_called_once()
+            self.assertEqual(sk.stop_loop.alarm.call_args[0][0], "keeper_unfed")
+            sk.stop_loop.feed.put((9, 9, []))
+            sk.fed_step(0.01)
+        self.assertEqual((said, sk.unfed_said, sk.fast_block), (["keeper_fed_again"], False, 9))
+
+
+class TheLogWindow(unittest.TestCase):
+    """eth_getLogs in windows a node takes, learned from its refusals (`LogWindow`): ops/tests/test_stop_filler.py holds
+    the stops' loop on such nodes; here the window alone."""
+
+    def node(self, limit: int, words: str = "eth_getLogs: HTTP 400", head: int = 10**9, error=RuntimeError):
+        asked = []
+
+        def call(method, params):
+            lo, hi = int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)
+            asked.append((lo, hi))
+            if hi > head:
+                raise RuntimeError("eth_getLogs: {'code': -32602, 'message': 'block range extends beyond current head block'}")
+            if hi - lo + 1 > limit:
+                raise error(words)
+            return [{"blockNumber": hex(b)} for b in range(lo, hi + 1)]
+
+        return call, asked
+
+    def test_a_refusal_of_the_width_is_narrowed_to_the_width_named_or_to_half_and_kept_for_an_hour(self):
+        now = {"t": 0.0}
+        for words, width in (("eth_getLogs: HTTP 400: up to a 10 block range", 10), ("eth_getLogs: HTTP 400", 6),
+                             ("400 Client Error: Bad Request", 6)):
+            w = k.LogWindow(50, say=lambda e, **f: None, clock=lambda: now["t"])
+            call, asked = self.node(10, words)
+            got, top = w.read(call, {}, 101, 220)
+            self.assertEqual(([int(l["blockNumber"], 16) for l in got], top), (list(range(101, 221)), 220), words)
+            self.assertEqual(w.width, width, words)
+            asked.clear()
+            w.read(call, {}, 221, 240)
+            self.assertTrue(all(hi - lo < width for lo, hi in asked), "kept: no refusal the next time")
+            now["t"] += k.LOG_WINDOW_RETRY_S
+            asked.clear()
+            w.read(call, {}, 241, 300)
+            self.assertEqual((asked[0], w.width), ((241, 290), width), "tried at full an hour on, refused, narrowed again")
+
+    def test_an_error_that_says_nothing_of_the_width_narrows_that_read_only(self):
+        for words, error, unsure in (("eth_getLogs: {'code': -32603, 'message': 'internal error'}", RuntimeError, ()),
+                                     ("eth_getLogs: HTTP 400", TimeoutError, (TimeoutError,))):
+            w = k.LogWindow(50, say=lambda e, **f: None)
+            call, _ = self.node(10, words, error=error)
+            got, top = w.read(call, {}, 1, 100, unsure=unsure)
+            self.assertEqual((len(got), top, w.width), (100, 100, 50), words)
+
+    def test_a_single_block_refused_a_busy_node_and_a_rate_limit_are_raised_as_they_come(self):
+        w = k.LogWindow(50, say=lambda e, **f: None)
+        call, asked = self.node(0)
+        with self.assertRaises(RuntimeError):
+            w.read(call, {}, 1, 4)
+        self.assertEqual(asked, [(1, 4), (1, 2), (1, 1)], "narrowed down to one block, then raised")
+        busy = mock.Mock(side_effect=k.c.NodeBusy("eth_getLogs: HTTP 429"))
+        with self.assertRaises(k.c.NodeBusy):
+            w.read(busy, {}, 1, 50, passes=(k.c.NodeBusy,))
+        self.assertEqual(busy.call_count, 1)
+        limited = mock.Mock(side_effect=RuntimeError("eth_getLogs: rate limited 7 times in a row"))
+        with self.assertRaises(RuntimeError):
+            w.read(limited, {}, 1, 50)
+        self.assertEqual((limited.call_count, w.width), (1, 50))
+
+    def test_a_range_past_the_nodes_logs_is_read_to_where_they_end_and_teaches_nothing(self):
+        w = k.LogWindow(50, say=lambda e, **f: None)
+        call, asked = self.node(50, head=118)
+        got, top = w.read(call, {}, 101, 120)
+        self.assertEqual(([int(l["blockNumber"], 16) for l in got], top), (list(range(101, 119)), 118))
+        self.assertEqual((w.width, w.taken_short(), w.taken_short()), (50, 2, 0))
+        got, top = w.read(call, {}, 119, 120)
+        self.assertEqual((got, top), ([], 118), "nothing past its head yet: read again next time")
+
 
 class TheMeasure(unittest.TestCase):
     """--measure judges each order by the chain's events. A fill that lands between the read of the events and the
