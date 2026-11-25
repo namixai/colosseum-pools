@@ -851,18 +851,27 @@ class TheFirstPool(unittest.TestCase):
     PRICES = {5_000: (20, 30, 40, 50), 10_000: (40, 60, 79, 95), 25_000: (100, 150, 198, 238),
               50_000: (200, 300, 395, 475), 100_000: (400, 600, 790, 950), 250_000: (1_000, 1_500, 1_975, 2_375)}
 
-    def test_it_is_the_cfos_menu_of_24_lines_and_locks_4000(self):
+    def test_it_is_the_cfos_menu_of_24_lines_and_locks_1600(self):
+        """Alex's rule of 11 November: the first pool opens with the lines of 5 000 and 10 000, and we lock in it our
+        own money for two payouts of the larger, 2 x 8 % x 10 000 = 1 600; 25 000 and up are there and off."""
         want = [(size, self.PRICES[size][k]) for size in self.SIZES for k in range(4)]
         self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], want)
-        self.assertEqual(d.locked_of(FIRST), 4_000 * 10**6, "the creator's lock of 16 November")
-        self.assertEqual(d.on_of(FIRST), 0xfff, "5 000, 10 000 and 25 000 on; 50 000 and up off")
-        self.assertEqual([m["on"] for m in FIRST["menu"]], [m["size_usdc"] <= 25_000 for m in FIRST["menu"]])
+        self.assertEqual(d.locked_of(FIRST), 1_600 * 10**6, "two payouts of 10 000")
+        self.assertEqual(d.locked_of(FIRST), 2 * 10_000 * 10**6 * d.PAYOUT_BPS // 10_000)
+        self.assertEqual(d.on_of(FIRST), 0xff, "5 000 and 10 000 on; 25 000 and up off")
+        self.assertEqual([m["on"] for m in FIRST["menu"]], [m["size_usdc"] <= 10_000 for m in FIRST["menu"]])
+        # 1 600 covers no line of 25 000: the plan with one switched on is refused before anything is sent.
+        on25 = json.loads(json.dumps(FIRST))
+        on25["menu"][8]["on"] = True
+        with self.assertRaises(SystemExit) as caught:
+            d.on_of(on25)
+        self.assertIn("line 8 (25000) is on, and 1600 locked does not cover 2 of its payouts (4000)", str(caught.exception))
         # The same menu the contract tests open a pool on and measure the gas of (`_firstPlan`).
         sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
         body = sol[sol.index("function _firstPlan()"):]
         body = body[:body.index("\n    }\n")]
-        self.assertIn("p.locked = 4_000e6;", body)
-        self.assertIn("p.on = 0xfff;", body)
+        self.assertIn("p.locked = 1_600e6;", body)
+        self.assertIn("p.on = 0xff;", body)
         self.assertIn("uint16[4] memory dd = [uint16(300), 400, 500, 600];", body)
         self.assertIn("uint16[4] memory target = [uint16(900), 1000, 1000, 1000];", body)
         self.assertIn("uint64[12] memory price = [uint64(20e6), 30e6, 40e6, 50e6, 40e6, 60e6, 79e6, 95e6, 100e6, 150e6, "
@@ -878,7 +887,7 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(plan[5:9], (604800, True, 150, h))
         # Each line its tier, trailing to the start, and two payouts a day.
         self.assertEqual(plan[9:11], ([(dd, t, 1) for _ in self.SIZES for dd, t in self.TIERS], 2))
-        self.assertEqual(plan[11:], (4_000 * 10**6, 0xfff))
+        self.assertEqual(plan[11:], (1_600 * 10**6, 0xff))
         # The payout is 8 % of the size: what the terms say each line needs free.
         self.assertEqual(d.PAYOUT_BPS, 800)
 
@@ -888,12 +897,13 @@ class TheFirstPool(unittest.TestCase):
             line = f"{dd // 100} % and {t // 100} %: " + ", ".join(
                 f"{size:,} for {self.PRICES[size][k]:,} USDC".replace(",", " ") for size in self.SIZES)
             self.assertIn(line, text)
-        self.assertIn("The pool opens with the lines of 5 000, 10 000 and 25 000 switched on; the lines of 50 000, "
+        self.assertIn("The pool opens with the lines of 5 000 and 10 000 switched on; the lines of 25 000, 50 000, "
                       "100 000 and 250 000 are there and switched off.", text)
         self.assertIn("Only the pool's creator switches a line on, and only when the pool holds free money for two "
-                      "payouts of that line: 8 000 for 50 000, 16 000 for 100 000, 40 000 for 250 000. Until the pool "
-                      "holds that money, the line cannot be switched on.", text)
-        for size in (50_000, 100_000, 250_000):
+                      "payouts of that line: 4 000 for 25 000, 8 000 for 50 000, 16 000 for 100 000, 40 000 for "
+                      "250 000. Until the pool holds that money, the line cannot be switched on.", text)
+        self.assertNotIn("5 000, 10 000 and 25 000 switched on", text)
+        for size in (25_000, 50_000, 100_000, 250_000):
             self.assertIn(f"{2 * size * d.PAYOUT_BPS // 10_000:,} for {size:,}".replace(",", " "), text)
         self.assertIn("and the payouts of every trader who has passed an exam or runs a stage", text)
         self.assertIn("the payout of a trader who has passed the exam stays in the pool from the pass, and for as long "
@@ -1099,10 +1109,11 @@ class TheMeasurePool(unittest.TestCase):
 
 
 class TheMainnetMeasurePlan(unittest.TestCase):
-    """The measuring pool's plan of mainnet (24 November 2026): the testnet plan with its network named and the opening
-    of its terms in mainnet's words, nothing else; mainnet takes it, testnet refuses it, and `check` takes it."""
+    """The measuring pool's plan of mainnet (24 November 2026): the testnet plan with its network named, the opening
+    of its terms in mainnet's words and, since 25 November, one line of 200 for 2 in place of 1 000 for 9, so that it
+    locks 32 and not 160; nothing else. Mainnet takes it, testnet refuses it, and `check` takes it."""
     PLAN = str(ROOT / "deployments/plans/sim-measure-pool-999.json")
-    LARGEST = "0x" + (1_000 * 10**6).to_bytes(32, "big").hex()
+    LARGEST = "0x" + (200 * 10**6).to_bytes(32, "big").hex()
     FEE_SEL = "0x" + keccak(text="creationFee()")[:4].hex()
     RAW = json.loads((ROOT / "deployments/plans/sim-measure-pool-999.json").read_text(encoding="utf-8"))
     TESTNET = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text(encoding="utf-8"))
@@ -1110,24 +1121,34 @@ class TheMainnetMeasurePlan(unittest.TestCase):
                "paper exams on nobody's money; prices are testnet USDC.",
                "Trading exams for measuring fills. Not for sale. Both stages are trading exams on nobody's money; prices "
                "are in USDC.")
+    LINE = ("An exam costs the price of its line: 1 000 for 9.", "An exam costs the price of its line: 200 for 2.")
 
-    def test_it_is_the_testnet_plan_but_for_its_network(self):
+    def test_it_is_the_testnet_plan_but_for_its_network_and_its_smaller_line(self):
         raw, old = self.RAW, self.TESTNET
         self.assertEqual(raw["network"], "mainnet")
         self.assertNotIn("network", old)
-        rest = lambda p: {k: v for k, v in p.items() if k not in ("network", "about", "terms_text")}
-        self.assertEqual(rest(raw), rest(old), "every number, rule and code the testnet plan's")
+        rest = lambda p: {k: v for k, v in p.items() if k not in ("network", "about", "terms_text", "menu")}
+        self.assertEqual(rest(raw), rest(old), "every other number, rule and code the testnet plan's")
+        # One line of 200 for 2 (25 November): testnet's 1 000 for 9 at a fifth, the price rounded up from 1.8. It
+        # locks two payouts of 16, 32 USDC, where testnet's locks 160.
+        self.assertEqual(old["menu"], [{"size_usdc": 1000, "price_usdc": 9}], "testnet's plan as it was")
+        self.assertEqual(raw["menu"], [{"size_usdc": 200, "price_usdc": 2}])
+        self.assertEqual(d.plan_of(raw, b"\0" * 32)[0], [(200 * 10**6, 2 * 10**6)])
+        self.assertEqual(d.locked_of(old), 160 * 10**6)
         self.assertEqual(old["terms_text"].count(self.OPENING[0]), 1)
-        self.assertEqual(raw["terms_text"], old["terms_text"].replace(*self.OPENING), "the terms but their opening")
+        self.assertEqual(old["terms_text"].count(self.LINE[0]), 1)
+        self.assertEqual(raw["terms_text"], old["terms_text"].replace(*self.OPENING).replace(*self.LINE),
+                         "the terms but their opening and the line's price")
         self.assertNotIn("testnet", (raw["terms_text"] + raw["about"]).lower())
         # Its opening says trading exams where testnet's says a simulated pool and paper exams: the site shows the
         # terms on the pool's page, and says neither word (17 November). The rest is testnet's, word for word.
         self.assertIn("paper exams", old["terms_text"])
         self.assertIsNone(re.search(r"paper|simulat", raw["terms_text"], re.IGNORECASE))
         self.assertEqual("0x" + keccak(text=raw["terms_text"]).hex(),
-                         "0xb05b636ecf4ff23ba9d9f9cff83ea00ea570794fc294e74e370c188ba184579d",
+                         "0x61be92ac26a257e2681822f0a896b98cb752b1d01495fe63e40a460a04680d8b",
                          "the terms the mainnet sheet names")
-        self.assertEqual(d.locked_of(raw), 160 * 10**6)
+        self.assertEqual(d.locked_of(raw), 32 * 10**6, "two payouts of 8 % of 200")
+        self.assertEqual(d.locked_of(raw), 2 * 200 * 10**6 * d.PAYOUT_BPS // 10_000)
         self.assertEqual(d.on_of(raw), 1, "its one line on")
         for stage in ("exam", "funded"):
             self.assertEqual(raw[stage]["fill_window"], int(constant("MAX_FILL_WINDOW")))
@@ -1162,9 +1183,9 @@ class TheMainnetMeasurePlan(unittest.TestCase):
             code, calls, said = TheCheck.run_check(self, ["--network", "mainnet"], create_needs=1_000_000)
         self.assertEqual(code, 0)
         self.assertIn("deploy_sim check: mainnet (chain 999)", said)
-        self.assertIn("line             1000 for 9 USDC: loss limit 6 %, target 10 %, from the start", said)
-        self.assertIn("payouts a day    2; locks 160 USDC; terms keccak 0xb05b636ecf4f", said)
-        self.assertIn("the factory accepts the plan; largest size 1000 USDC.", said)
+        self.assertIn("line             200 for 2 USDC: loss limit 6 %, target 10 %, from the start", said)
+        self.assertIn("payouts a day    2; locks 32 USDC; terms keccak 0x61be92ac26a2", said)
+        self.assertIn("the factory accepts the plan; largest size 200 USDC.", said)
         self.assertIn("the pool opens by an ordinary transaction. Nothing was sent.", said)
         # The assets as `deploy` lists them on mainnet: BTC 0, ETH 1, SOL 5.
         state = next(p for m, p in calls if m == "eth_call")[2]
@@ -1299,7 +1320,7 @@ class TheCheck(unittest.TestCase):
         self.assertEqual(b["stateDiff"], {text_slot: word(d.CHECK_AT["text"])}, "the terms, as `pool` publishes them")
         self.assertIn("the factory accepts the plan; largest size 250000 USDC.", said)
         self.assertIn("250000 for 2375 USDC: loss limit 6 %, target 10 %, trailing to the start", said)
-        self.assertIn("locks 4000 USDC", said)
+        self.assertIn("locks 1600 USDC", said)
 
     def test_the_gas_of_create_is_measured_by_eth_call_against_the_small_block(self):
         code, calls, said = self.run_check([], create_needs=1_673_901)

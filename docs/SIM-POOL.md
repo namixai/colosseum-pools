@@ -30,8 +30,8 @@ fail, and their prices pay for the ones that pass.
   platform, and
   the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
   smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
-  lines whose two payouts the lock covers; the others start off. The first pool locks 4 000: 5 000, 10 000 and
-  25 000 on, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
+  lines whose two payouts the lock covers; the others start off. The first pool locks 1 600, two payouts of
+  10 000 (Alex, 11 November 2026): 5 000 and 10 000 on, 25 000, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
   tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
   trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
   pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
@@ -430,7 +430,7 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `deployments/plans/sim-first-pool.json`: 24 lines, the sizes 5 000, 10 000, 25 000, 50 000, 100 000 and
   250 000 each on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10 % at the CFO's prices, each line's loss limit
   trailing the highest daily snapshot up to the starting balance (`drawdown_kind` 1), payout 8 % of the size, two
-  payouts a day, 4 000 locked (`locked_usdc`), the lines of 5 000, 10 000 and 25 000 on and the larger ones off
+  payouts a day, 1 600 locked (`locked_usdc`), the lines of 5 000 and 10 000 on and the larger ones off
   (`on`) until the creator switches them on with two of their payouts free; thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
@@ -883,8 +883,12 @@ The fill window of a plan is fixed at creation, so it is measured first, on a po
 the widest window, 60 blocks, so a late fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
 Its terms say testnet, so mainnet refuses it; mainnet's is `deployments/plans/sim-measure-pool-999.json`, the same
 plan with its network named (`"network": "mainnet"`: `pool` and `check` refuse a plan that names another network than
-theirs, so testnet refuses it) and the opening of its terms without testnet's words, saying trading exams where
-testnet's says a simulated pool and paper exams (the site shows the terms, and says neither). Once measured, the pool's line
+theirs, so testnet refuses it), the opening of its terms without testnet's words, saying trading exams where
+testnet's says a simulated pool and paper exams (the site shows the terms, and says neither), and a smaller line: 200
+for 2, so it locks 32 USDC of our own and not 160 (25 November 2026). Not smaller: 100 orders of 12 units of BTC
+(7 USDC each at 58 500) cost about 0.5 USDC at mainnet's book, 5 bp from the oracle, and 5.6 USDC were the book to
+stand at the 150 bp ceiling on the trader's side all run long; both are under the 3 % daily loss of 200, 6 USDC,
+and a breach would end the exam halfway through the measure. Once measured, the pool's line
 goes off (`deploy_sim line --off`): the exam bought runs on and nothing more is sold.
 
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
