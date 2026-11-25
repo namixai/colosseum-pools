@@ -414,7 +414,7 @@ test("mainnet's index.html says mainnet in every place the committed one says te
     const written = index("--network", "mainnet", "--root", dir);
     assert.equal(written.status, 0, written.stderr);
     const page = written.stdout;
-    assert.doesNotMatch(page, /testnet|mock|hackathon|demo|no value/i);
+    assert.doesNotMatch(page, /testnet|mock|hackathon|demo|no value|unaudited/i);
     // The title, the description and the picture's words as Marketing wrote them (24 November 2026).
     const title = "Upools: trading exams on Hyperliquid";
     const description = "Trading exams on BTC, ETH and SOL on Hyperliquid mainnet. The price is paid in USDC. No real money is traded in the exam.";
@@ -423,9 +423,9 @@ test("mainnet's index.html says mainnet in every place the committed one says te
     assert.ok(page.includes(`<meta property="og:title" content="${title}">`));
     assert.ok(page.includes(`<meta property="og:description" content="${description}">`));
     // The plaque stands where testnet's notice and the entry question stood, and the question is still asked.
-    assert.match(page, /<div class="notice">Mainnet\. Real USDC\. Unaudited\.<\/div>/);
-    assert.match(page, /<dialog id="gate">\s*<h2>Before you continue<\/h2>\s*<p>Mainnet\. Real USDC\. Unaudited\.<\/p>\s*<label class="check"><input type="checkbox" id="gate-agree"> I understand\.<\/label>/);
-    assert.equal(page.match(/Mainnet\. Real USDC\. Unaudited\./g).length, 2);
+    assert.match(page, /<div class="notice">Mainnet\. Real USDC\.<\/div>/);
+    assert.match(page, /<dialog id="gate">\s*<h2>Before you continue<\/h2>\s*<p>Mainnet\. Real USDC\.<\/p>\s*<label class="check"><input type="checkbox" id="gate-agree"> I understand\.<\/label>/);
+    assert.equal(page.match(/Mainnet\. Real USDC\./g).length, 2);
     // The picture of a shared link is mainnet's own: testnet's has testnet's plaque drawn into it.
     assert.match(page, /  <meta property="og:image" content="https:\/\/pools\.usenami\.io\/brand\/og-mainnet-1200x630\.png">\n  <meta property="og:image:width" content="1200">\n  <meta property="og:image:height" content="630">\n  <meta property="og:image:alt" content="Upools on Hyperliquid mainnet\. BTC, ETH, SOL\. USDC\.">\n  <meta name="twitter:card" content="summary_large_image">\n/);
     assert.doesNotMatch(page, /og-image-1200x630/);

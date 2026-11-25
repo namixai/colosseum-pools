@@ -443,7 +443,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `deployments/plans/sim-rehearsal-998.json`: one line of 20 for 2 test USDC, a target of 0.25 % in both stages,
   3.2 locked (two payouts of 1.6), the first pool's rules, cost and fill delay, the widest fill window, and the
   creator's own code `OWN`; the partners' codes come by `code`. `check` takes it as it takes the first pool's, and
-  mainnet refuses it.
+  mainnet refuses it. A plan may name its network (`"network"`): `pool` and `check` refuse it on any other, as testnet
+  refuses mainnet's measuring plan (`deployments/plans/sim-measure-pool-999.json`).
 
 - **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
@@ -880,6 +881,11 @@ allowed to carry a stop out), a second filler, or both.
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
 (`deployments/plans/sim-measure-pool.json`: one line of 1 000 for 9, the first pool's fill delay of 4 blocks and
 the widest window, 60 blocks, so a late fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
+Its terms say testnet, so mainnet refuses it; mainnet's is `deployments/plans/sim-measure-pool-999.json`, the same
+plan with its network named (`"network": "mainnet"`: `pool` and `check` refuse a plan that names another network than
+theirs, so testnet refuses it) and the opening of its terms without testnet's words, saying trading exams where
+testnet's says a simulated pool and paper exams (the site shows the terms, and says neither). Once measured, the pool's line
+goes off (`deploy_sim line --off`): the exam bought runs on and nothing more is sold.
 
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
     spike/.venv/bin/python -m ops.sim_keeper --deployment <label> --measure <exam> --trader-wallet trader --orders 100

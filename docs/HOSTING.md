@@ -1430,7 +1430,7 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
    still hold a place marked `[TO CONFIRM`, each of which it lists.
 3. Read the folder's two written files before uploading. `config.js` names chain 999,
    `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment. `index.html` says "Mainnet.
-   Real USDC. Unaudited." where testnet's page has its notice and its entry question, and has "Pools" alone in its
+   Real USDC." where testnet's page has its notice and its entry question, and has "Pools" alone in its
    menu. To look without packing, the packer's two commands can be run in a checkout of that commit, where the
    script is the commit's own:
 

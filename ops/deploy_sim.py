@@ -431,8 +431,15 @@ def keeper_nodes_of(args) -> dict | None:
     return nodes
 
 
-def mainnet_plan_ok(raw: dict) -> None:
-    """On mainnet a plan written for testnet is refused: its terms would tell traders the wrong network."""
+def plan_network_ok(raw: dict) -> None:
+    """A plan that names its network (`network`) is refused on any other: the measuring pool's plan of mainnet,
+    deployments/plans/sim-measure-pool-999.json, whose terms say nothing of test money, is refused on testnet. And on
+    mainnet a plan written for testnet is refused: its terms would tell traders the wrong network. A plan that names
+    none and says nothing of testnet (the first pool's) is one plan for both."""
+    named = raw.get("network")
+    if named is not None and named != c.NETWORK.name:
+        raise SystemExit(f"this plan is written for {named} (its \"network\" says so); {c.NETWORK.name} takes a plan "
+                         "of its own")
     if c.NETWORK.name == "mainnet" and any("testnet" in str(raw.get(f, "")).lower() for f in ("terms_text", "about")):
         raise SystemExit("this plan is written for testnet (its terms or about say so); mainnet takes a plan of its own")
 
@@ -613,7 +620,7 @@ def deploy(args) -> int:
 def pool(args) -> int:
     record = deployments.load(args.deployment)
     raw = json.loads(pathlib.Path(args.plan).read_text())
-    mainnet_plan_ok(raw)
+    plan_network_ok(raw)
     text = raw["terms_text"]
     terms_hash = keccak(text=text)
     plan = plan_of(raw, terms_hash)
@@ -737,7 +744,7 @@ def check(args) -> int:
     factory and PaperExam this checkout builds, put in the call by a state override over the network's precompiles,
     the assets listed as `deploy` lists them and the terms as `pool` publishes them."""
     raw = json.loads(pathlib.Path(args.plan).read_text(encoding="utf-8"))
-    mainnet_plan_ok(raw)
+    plan_network_ok(raw)
     text = raw["terms_text"].encode("utf-8")
     if not text or len(text) > TERMS_MAX_BYTES:
         raise SystemExit(f"deploy_sim check: the terms are {len(text)} bytes; TermsBook.publish takes 1 to "

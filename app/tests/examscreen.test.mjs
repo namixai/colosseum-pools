@@ -318,10 +318,10 @@ test("a dollar amount keeps the library's digits: thousands grouped, two decimal
 
 test("a testnet page carries the plaque and the tag, a mainnet page its own plaque and no tag", () => {
   assert.deepEqual(networkMarks({ hyperliquidChain: "Testnet" }), { plaque: "Testnet. Mock USDC. Unaudited.", tag: "Testnet app" });
-  const mainnet = { plaque: "Mainnet. Real USDC. Unaudited.", tag: null };
+  const mainnet = { plaque: "Mainnet. Real USDC.", tag: null };
   assert.deepEqual(networkMarks({ hyperliquidChain: "Mainnet" }), mainnet);
   assert.deepEqual(networkMarks({ hyperliquidChain: "Mainnet", chainId: 998 }), mainnet, "by the network the page is built for, nothing else");
-  assert.equal(SCREEN_TEXT.mainnetPlaque, "Mainnet. Real USDC. Unaudited.");
+  assert.equal(SCREEN_TEXT.mainnetPlaque, "Mainnet. Real USDC.");
   assert.match(read("../config.js"), /hyperliquidChain: "Testnet"/);
 });
 

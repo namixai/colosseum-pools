@@ -235,12 +235,44 @@ class TheDeployScript(unittest.TestCase):
             self.assertEqual(d._rules(rules)[3], [0, 1, 5])
 
     def test_mainnet_refuses_a_plan_written_for_testnet(self):
-        # The measuring pool's plan says testnet; the first pool's is one plan for both networks (16 November).
+        # The measuring pool's plan of testnet says testnet; mainnet's is sim-measure-pool-999.json (24 November); the
+        # first pool's is one plan for both networks (16 November).
         plan = str(ROOT / "deployments/plans/sim-measure-pool.json")
         with on(networks.MAINNET), mock.patch.object(d.deployments, "load", return_value={"SimPoolFactory": A}):
             with self.assertRaises(SystemExit) as caught:
                 d.main(["pool", "--deployment", "x", "--plan", plan, "--signer", B, "--network", "mainnet"])
         self.assertIn("written for testnet", str(caught.exception))
+
+    def test_mainnet_opens_the_measuring_pool_of_its_own_plan_and_testnet_refuses_it(self):
+        """`pool --signer` with mainnet's measuring plan prints the Safe's three calls: 160 locked, the factory's fee,
+        a window of 60 blocks, mainnet's BTC, ETH and SOL; nothing is sent and no key is read. Testnet refuses it."""
+        import io
+        from contextlib import redirect_stdout
+        plan = str(ROOT / "deployments/plans/sim-measure-pool-999.json")
+        record = {"SimPoolFactory": A, "TermsBook": C3, "usdc": networks.MAINNET.usdc_erc20}
+        out = io.StringIO()
+        with on(networks.MAINNET), mock.patch.object(d.deployments, "load", return_value=record), \
+                mock.patch.object(d.c, "rpc", return_value="0x%064x" % 10**18), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "send_tx") as sent, \
+                mock.patch.object(d.c, "transact") as tx, redirect_stdout(out):
+            self.assertEqual(d.main(["pool", "--deployment", "x", "--plan", plan, "--signer", B,
+                                     "--network", "mainnet"]), 0)
+            plan_tuple = d.plan_of(json.loads(pathlib.Path(plan).read_text()), b"\0" * 32)
+        key.assert_not_called(), sent.assert_not_called(), tx.assert_not_called()
+        said = out.getvalue()
+        self.assertIn("1 sizes 1000 for 9 USDC", said)
+        self.assertIn("locks            160 USDC, pays 1 HYPE (the factory's fee); lines on at the start: 0 ", said)
+        self.assertIn("book             at the book, ceiling 150 bp; fill window 60 blocks", said)
+        self.assertIn("code             'MEASURE' 0x", said)
+        self.assertIn(f"-> {d.to_checksum_address(B)} 0%", said, "the creator's own code, no share")
+        txs = json.loads(said[said.index("{"):])["transactions"]
+        self.assertEqual([t["to"].lower() for t in txs], [C3, networks.MAINNET.usdc_erc20.lower(), A])
+        self.assertEqual([t["value"] for t in txs], ["0", "0", str(10**18)])
+        self.assertEqual((plan_tuple[1][3], plan_tuple[3][3]), ([0, 1, 5], [0, 1, 5]), "mainnet's BTC, ETH and SOL")
+        with on(networks.TESTNET), mock.patch.object(d.deployments, "load", return_value=record):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["pool", "--deployment", "x", "--plan", plan, "--signer", B, "--network", "testnet"])
+        self.assertIn("written for mainnet", str(caught.exception))
 
     def test_send_or_say_on_mainnet_without_the_phrase_sends_nothing(self):
         args = SimpleNamespace(network="mainnet", signer=None, send=True, key="closer")
