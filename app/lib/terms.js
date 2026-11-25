@@ -14,7 +14,8 @@ const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|
 
 /**
  * The text's blocks as HTML: `# ` the page's heading, `## ` a section's, a run of `- ` or `1. ` lines a list, a run of
- * `|` lines a table whose second line only marks the header, and any other run of lines a paragraph.
+ * `|` lines a table whose second line only marks the header, and any other run of lines that are not blank a paragraph,
+ * each line's leading and trailing spaces dropped.
  */
 export function termsHtml(text) {
   const out = [];
@@ -43,7 +44,9 @@ export function termsHtml(text) {
       out.push(`<div class="scroll"><table><thead><tr>${cells(head).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead>`
         + `<tbody>${body.map((row) => `<tr>${cells(row).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
     } else {
-      out.push(`<p>${run(/^(?!# |## |- |\d+\. |\|)\S/).map(inline).join(" ")}</p>`);
+      // Any other line that is not blank, leading spaces too: one the forms above do not take is always taken here,
+      // so the loop moves on from every line (review of #346).
+      out.push(`<p>${run(/^(?!# |## |- |\d+\. |\|)\s*\S/).map((l) => inline(l.trim())).join(" ")}</p>`);
     }
   }
   return out.join("\n");

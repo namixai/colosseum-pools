@@ -10,7 +10,7 @@ Read these Terms in full before you buy an exam or open a pool.
 
 These Terms apply to your use of Upools at https://pools.usenami.io/ and of its contracts on the Hyperliquid network (HyperEVM). Payments are made in USDC on Hyperliquid mainnet.
 
-Upools is operated by [TO CONFIRM: legal entity name], [TO CONFIRM: registered address], [TO CONFIRM: company registration number]. In these Terms, "we" and "the platform" mean that operator.
+In these Terms, "Upools", "we", "us" and "the platform" mean the operator of Upools.
 
 By connecting a wallet, buying an exam or opening a pool, you accept these Terms. If you do not accept them, do not use Upools.
 
@@ -33,11 +33,11 @@ Each line of the menu is an account size with its own loss limit and target, the
 | 5% / 10% | 40 USDC | 79 USDC | 198 USDC | 395 USDC | 790 USDC | 1,975 USDC |
 | 6% / 10% | 50 USDC | 95 USDC | 238 USDC | 475 USDC | 950 USDC | 2,375 USDC |
 
-The pool opens with the lines of 5,000, 10,000 and 25,000 switched on. The lines of 50,000, 100,000 and 250,000 are listed and switched off.
+The pool opens with the lines of 5,000 and 10,000 switched on. The lines of 25,000, 50,000, 100,000 and 250,000 are listed and switched off.
 
-Only the pool's creator can switch a line on, and only when the pool holds free money for two payouts of that line: 8,000 USDC for 50,000, 16,000 USDC for 100,000 and 40,000 USDC for 250,000. Until the pool holds that money, the line cannot be switched on.
+Only the pool's creator can switch a line on, and only when the pool holds free money for two payouts of that line: 4,000 USDC for 25,000, 8,000 USDC for 50,000, 16,000 USDC for 100,000 and 40,000 USDC for 250,000. Until the pool holds that money, the line cannot be switched on.
 
-Free money is what the pool holds, less the payouts it owes, sets aside or keeps for stops, and less the payouts of every trader who has passed an exam or is running a stage.
+Free money is what the pool holds, less the payouts it owes, sets aside or keeps for stops, less the code shares not yet sent on, and less the payouts of every trader who has passed an exam or is running a stage.
 
 A line that is on sells only while the pool holds free money for two of its payouts. While it does not, the line does not sell; it sells again when the money is back. The creator may switch a line off at any time. An exam already bought keeps its rules.
 
@@ -46,7 +46,7 @@ A line that is on sells only while the pool holds free money for two of its payo
 These rules apply to both stages.
 
 - **Loss limit.** Each stage has a loss limit equal to the line's percent of the starting balance. It is measured from the highest equity recorded at the start of a UTC day (in the day's first 15 minutes), and it never rises above the starting balance. Once the account's recorded equity is that percent above the start, the limit stays at the starting balance.
-- **Daily loss.** Equity may fall no more than 3% below the day's first snapshot. The snapshot is equity including open positions, taken in the first minutes of the UTC day.
+- **Daily loss.** Equity may fall no more than 3% below the day's first snapshot. The snapshot is equity including open positions, taken within the first 15 minutes of the UTC day.
 - **Target.** The line's percent of the account size.
 - **Leverage.** At most 10x on BTC and ETH, and at most 5x on SOL.
 - **Time.** Thirty days at most per stage. There is no minimum number of trading days.
@@ -56,6 +56,8 @@ These rules apply to both stages.
 An order is filled by the platform's filler no sooner than the fourth block after the block it is placed in, at the price of the block that fills it. If it is not filled within 3 blocks from then, it lapses at no cost.
 
 A fill takes the order book's price, never better than the oracle's price and at most 1.5% worse. Each fill pays 0.045% of its notional, which is Hyperliquid's taker fee.
+
+A trader may set a stop order and a target order on an open position. They take effect no sooner than 4 blocks after they are set. They trigger when the oracle's price reaches their level. A triggered order is filled at the fill price of that block (the order book's price, never better than the oracle's price and at most 1.5% worse, with the 0.045% fee), not at the price of its level. The platform's filler executes triggered orders. If the filler does not, anyone may record that the order has triggered and execute it 60 blocks later.
 
 ## 6. Passing, the second stage and the payout
 
@@ -82,7 +84,7 @@ Until a payout is paid, the platform's checker may stop it, once, with one of fo
 
 A stopped payout stays in the pool for at least 14 days, while the trader can object. If the platform's operator lifts the stop within those 14 days, the payout is paid like any other. After them, anyone may make the stop final, and only from then does the money belong to the pool.
 
-To object, write to business@usenami.io. [TO CONFIRM: objection procedure, what evidence to send, and who decides]
+**How to object.** Write to business@usenami.io within 14 days after the stop. Include your wallet address, the address of the exam, the reason given for the stop, why you object, and your evidence, such as transaction hashes. The platform's operator reviews the objection. If the operator lifts the stop within those 14 days, the payout is paid like any other, as set out above.
 
 ## 8. Trading group codes
 
@@ -98,7 +100,7 @@ This section applies if you open and fund a pool.
 - **Minimum term.** A pool runs at least 6 months (184 days) from its opening. Before then, its creator can neither close it nor take back what it put in, only the surplus above it. Only the platform can close a pool sooner, and the money then goes where it would anyway.
 - **Withdrawals.** The creator withdraws by a request. The money leaves no sooner than 7 days after the request and within 3 days after that, only what the pool can spare then, and never more than was asked. The platform may cancel a withdrawal request. The platform never moves the money.
 - **What stays in the pool.** While the pool is open, the payout of a trader who has passed the exam stays in the pool from the pass and for as long as the stage runs. The creator can withdraw surplus only above every such payout, and above three payouts of the largest line that has an exam or a stage running, or is switched on and selling.
-- **Surplus** means what the pool holds above the payouts owed, held and kept, and above what the creator put in.
+- **Surplus** means what the pool holds above the payouts owed, held and kept, above the code shares not yet sent on, and above what the creator put in.
 - **Code shares.** When the creator takes money out of the pool, each code is credited its share of the surplus taken (less the platform's part), in proportion to the part of all exam prices the pool received that came from that code's sales. What a code is credited stays in the pool, out of the creator's reach and out of payouts, until anyone sends it on, at any time: to the code's owner, and the author's part to the author. A share credited to a code is never taken back, even if later payouts bring the pool's money below what the creator put in.
 - **Other USDC sent to the pool.** USDC sent to the pool other than through the creator's deposit function is not counted as put in by the creator. It covers payouts like any money of the pool. Any part of it that is surplus when the creator takes money out is shared with the codes' owners like any other surplus.
 
@@ -116,23 +118,53 @@ This section applies if you open and fund a pool.
 - Upools depends on the Hyperliquid network, its oracle, USDC and your own wallet. Any of them can fail, be delayed or change.
 - You are responsible for your wallet, your keys and any transaction you sign.
 
-[TO CONFIRM: disclaimer of warranties and limitation of liability wording, reviewed by counsel]
+## 12. No warranties
 
-## 12. Who may use Upools
+Upools, its site and its contracts are provided "as is" and "as available", with no warranty of any kind, whether express, implied or statutory. This includes any warranty of fitness for a particular purpose, accuracy, completeness, reliability, availability or timeliness. We do not promise that Upools will work without interruption or errors.
 
-[TO CONFIRM: minimum age, restricted countries and persons, sanctions screening, whether identity checks apply]
+We accept no responsibility for:
 
-## 13. Changes to these Terms
+- errors, bugs or weaknesses in the code of the Upools contracts;
+- errors or failures of the oracle, the order book data or the platform's filler and keeper;
+- errors, failures, delays or changes of the Hyperliquid network, HyperEVM, cross-chain bridges or USDC;
+- your wallet, its provider, or any loss of access to your keys;
+- interruption or end of service of the site or the contracts;
+- unauthorized access to, or attacks on, the site, the contracts or your wallet;
+- errors or gaps in any content on the site.
 
-[TO CONFIRM: how and when we may change these Terms and how users are told]. Rules of an exam already bought do not change.
+## 13. Limitation of liability
 
-## 14. Governing law and disputes
+To the fullest extent the law allows, Upools and the people who work on it are not liable for any indirect, incidental, special, consequential or punitive damages, or for any loss of data, use or goodwill, arising from your use of Upools or from your inability to use it.
 
-[TO CONFIRM: governing law]
+Our total liability to you for all claims, of any kind and on any legal basis, will not exceed the greater of (a) the total you paid for exams on Upools and (b) 100 US dollars.
 
-[TO CONFIRM: dispute venue or arbitration body, and any class action waiver]
+Some jurisdictions do not allow certain warranties to be excluded or liability to be limited. In those jurisdictions, the exclusions and limits above apply to the fullest extent the law allows.
 
-## 15. Contact
+## 14. Who may use Upools
+
+Upools is not available to Restricted Persons. Restricted Persons are:
+
+- people and entities that live in, are located in, are incorporated in or have a registered office in the United States of America or Ontario, Canada;
+- people and entities that live in, are located in, are incorporated in or have a registered office in a territory subject to economic or trade sanctions or export control laws (Restricted Territories);
+- citizens of Restricted Territories, wherever they are;
+- people and entities named on a sanctions list.
+
+Upools does not check identity. By using Upools you confirm that:
+
+- you are not a Restricted Person;
+- you have reached the age of majority under the law of the country where you live;
+- you do not use a VPN, proxy or any other method to hide your location or get around these limits;
+- your use of Upools is lawful where you live. You alone are responsible for checking this.
+
+We may block access from any place or wallet that we reasonably believe is restricted.
+
+## 15. Changes to these Terms
+
+We may change these Terms. When we do, we update the "Last updated" date at the top of this page. Changes take effect when they are published. If you keep using Upools after that, you accept the changed Terms. If you do not accept them, stop using Upools.
+
+Rules of an exam already bought do not change.
+
+## 16. Contact
 
 business@usenami.io
 

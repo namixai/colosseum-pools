@@ -49,8 +49,11 @@ scan() { # label  extended-regex  [regex of lines to ignore]  [one address that 
   fi
   if [ -n "$known" ]; then
     # The known address is cut out of each line, whole (nothing of an address before it, nothing but a full stop
-    # ending a sentence after it), and the line is looked at again: any other address on it is still reported.
-    out=$(printf '%s\n' "$out" | sed -E "s/(^|[^A-Za-z0-9._%+-])${known}(\.?([^A-Za-z0-9.-]|$))/\1\2/g" | grep -E "$re" || true)
+    # ending a sentence after it), and the line is looked at again: any other address on it is still reported. One cut
+    # at a time, from the start of the line again (`:a` ... `ta`): a cut takes the character on each side of the
+    # address, so with one pass of `g` an address right after another would keep it and be reported (review of #346).
+    out=$(printf '%s\n' "$out" | sed -E -e ':a' -e "s/(^|[^A-Za-z0-9._%+-])${known}(\.?([^A-Za-z0-9.-]|$))/\1\2/" -e 'ta' \
+      | grep -E "$re" || true)
   fi
   out=$(printf '%s' "$out" | sed '/^$/d')
   if [ -n "$out" ]; then

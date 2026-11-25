@@ -137,18 +137,22 @@ HOME="$TMP/home" ./scripts/pack-site.sh "$simc" >/dev/null 2>&1 \
 [ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\",\"network\":\"testnet\"}" ] \
   || { echo "FAIL the default folder of a testnet pack is not pools-app-<first 8>"; exit 1; }
 echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as before"
-# The same commit with the Terms of Use as committed, ten places still marked "[TO CONFIRM": no mainnet pack, nothing
-# written, and the places named; testnet packs it as before. Then the Terms filled in and a page's text with a place
-# open (its description, from app_config.py): refused the same way.
+# The same commit with the Terms' date not yet set, its place marked "[TO CONFIRM" as it is committed until the day the
+# site goes up: no mainnet pack, nothing written, and the place named; testnet packs it as before. The place is opened
+# here, in the filled-in Terms, so the case holds before the date is set and after (review of #346). Then the Terms
+# filled in and a page's text with a place open (its description, from app_config.py): refused the same way.
+openblob="$(git cat-file blob "$termsblob" | sed 's/^Last updated: .*/Last updated: [TO CONFIRM: effective date]/' | git hash-object -w --stdin)"
+[ "$(git cat-file blob "$openblob" | grep -c '\[TO CONFIRM')" -eq 1 ] || { echo "FAIL mainnet terms: the test found no date to open a place in"; exit 1; }
 GIT_INDEX_FILE="$TMP/openindex" git read-tree "$simc"
-GIT_INDEX_FILE="$TMP/openindex" git update-index --add --cacheinfo "100644,$(git rev-parse HEAD:app/data/terms-mainnet.md),app/data/terms-mainnet.md"
+GIT_INDEX_FILE="$TMP/openindex" git update-index --add --cacheinfo "100644,$openblob,app/data/terms-mainnet.md"
 openc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/openindex" git write-tree)" -p HEAD -m "the Terms of Use not filled in")"
 if said="$(./scripts/pack-site.sh --network mainnet "$openc" "$TMP/open" 2>&1)" || [ -e "$TMP/open" ] || [ -e "$TMP/open.sha256" ]; then
   echo "FAIL mainnet terms: packed a mainnet site whose Terms of Use hold [TO CONFIRM places"; exit 1
 fi
 case "$said" in *"[TO CONFIRM places still open in $openc"*) ;; *) echo "FAIL mainnet terms: refused for another reason: $said"; exit 1 ;; esac
-[ "$(printf '%s\n' "$said" | grep -c '^  app/data/terms-mainnet.md:[0-9]*:.*\[TO CONFIRM')" -eq "$(git show HEAD:app/data/terms-mainnet.md | grep -c '\[TO CONFIRM')" ] \
-  || { echo "FAIL mainnet terms: the refusal does not name every open place: $said"; exit 1; }
+[ "$(printf '%s\n' "$said" | grep -c '^  app/data/terms-mainnet.md:[0-9]*:.*\[TO CONFIRM')" -eq 1 ] \
+  && printf '%s\n' "$said" | grep -q '^  app/data/terms-mainnet.md:[0-9]*:Last updated: \[TO CONFIRM: effective date\]$' \
+  || { echo "FAIL mainnet terms: the refusal does not name the open place: $said"; exit 1; }
 ./scripts/pack-site.sh "$openc" "$TMP/open-testnet" >/dev/null || { echo "FAIL mainnet terms: the same commit does not pack for testnet"; exit 1; }
 cfgblob="$(git show HEAD:scripts/app_config.py | sed 's/No real money is traded in the exam\./No real money is traded in the exam. [TO CONFIRM: wording]/' | git hash-object -w --stdin)"
 git cat-file blob "$cfgblob" | grep -qF '[TO CONFIRM: wording]' || { echo "FAIL mainnet terms: the test found no description to open a place in"; exit 1; }

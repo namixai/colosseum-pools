@@ -223,8 +223,9 @@ fetched or rewritten when the page loads, so a mainnet site cannot fall back to 
 a file failed to arrive. While this file has no mainnet entry a site can be written from, neither a `live` one nor
 a `staged` simulation-pool one, which is the case today, the script stops and nothing is packed. The packer also
 refuses mainnet, writing nothing and listing each place, while `app/data/terms-mainnet.md` or the page's own texts
-still hold a place marked `[TO CONFIRM` (the effective date, the operator's name and address, the law and the rest
-that only the owner or counsel fill in), or when the commit has no Terms of Use at all.
+still hold a place marked `[TO CONFIRM`, or when the commit has no Terms of Use at all. The Terms keep one such place
+as committed, the date they were last updated (`Last updated: [TO CONFIRM: effective date]`): it is set, as
+`Month D, YYYY`, in a commit of the day the site goes up, and that is the commit packed.
 
 Two of the app's values are not in this file. `liveRunPool` is a pool opened on testnet's live deployment after it
 was deployed; the script keeps it by network and label. `assetLeverage` is set when the record names a

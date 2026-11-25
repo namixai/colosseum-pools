@@ -143,9 +143,10 @@ test("the terms page of a mainnet site is its own Terms of Use, read from its fo
   const page = await open("#/terms");
   assert.deepEqual(terms.asked, ["./data/terms-mainnet.md"]);
   assert.match(page.html, /^<section class="card narrow terms"><h2>Terms of Use<\/h2>/);
-  assert.equal([...page.html.matchAll(/<h3>/g)].length, 15, "the fifteen sections");
-  assert.match(page.html, /<h3>15\. Contact<\/h3>\n<p>business@usenami\.io<\/p>\n<p>https:\/\/pools\.usenami\.io\/<\/p><\/section>$/);
-  assert.equal([...page.html.matchAll(/\[TO CONFIRM/g)].length, 10, "the ten places to fill in are shown as they are");
+  assert.equal([...page.html.matchAll(/<h3>/g)].length, 16, "the sixteen sections");
+  assert.match(page.html, /<h3>16\. Contact<\/h3>\n<p>business@usenami\.io<\/p>\n<p>https:\/\/pools\.usenami\.io\/<\/p><\/section>$/);
+  const text = readFileSync(join(built.site, "data/terms-mainnet.md"), "utf8");
+  assert.equal([...page.html.matchAll(/\[TO CONFIRM/g)].length, text.split("[TO CONFIRM").length - 1, "a place still open is shown as it is");
   assert.deepEqual(page.reads, [], "nothing of the chain is read for the terms");
   assert.equal(page.panel, null);
   terms.down = true;
