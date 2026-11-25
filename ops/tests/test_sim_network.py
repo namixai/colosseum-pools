@@ -533,7 +533,7 @@ class TheBigBlocksOffCommand(unittest.TestCase):
 
     def test_it_is_the_call_deploy_makes_in_its_finally(self):
         import inspect
-        self.assertIs(d.big_blocks, __import__("ops.deploy_testnet", fromlist=["big_blocks"]).big_blocks)
+        self.assertIs(d.big_blocks, dt.big_blocks)
         self.assertIn("big_blocks(op, False)", inspect.getsource(d.deploy))
 
 

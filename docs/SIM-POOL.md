@@ -888,7 +888,7 @@ testnet's says a simulated pool and paper exams (the site shows the terms, and s
 for 2, so it locks 32 USDC of our own and not 160 (25 November 2026). Its terms say surplus where testnet's say profit, as the first pool's do.
 
 If a `deploy` is killed before its `finally` runs, the deployer's wallet stays on big blocks. On any network, including mainnet,
-`ops.deploy_sim big-blocks-off --network mainnet [--operator deployer] [--send]` switches it back (the same call as the
+`spike/.venv/bin/python -m ops.deploy_sim big-blocks-off --network mainnet [--operator deployer] [--send]` switches it back (the same call as the
 `finally`, nothing else; without `--send` it only says what it would do; on mainnet `--send` takes the usual terminal phrase
 and the chain-id check). `ops/deploy_multi.py --big-blocks-off` is testnet only. Not smaller: 100 orders of 12 units of BTC
 (7 USDC each at 58 500) cost about 0.5 USDC at mainnet's book, 5 bp from the oracle, and 5.6 USDC were the book to
