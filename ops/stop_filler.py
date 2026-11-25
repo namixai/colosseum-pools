@@ -33,7 +33,8 @@ the slow pass. This loop runs in a thread of its own, beside the keeper's:
                      asks the node for no head and no logs of its own. The read goes in the width the node takes,
                      learned from its refusals (`sk.LogWindow`: Alchemy's free plan takes 10 blocks, HyperEVM's own
                      nodes 50), and as far as the node's logs reach: a node whose logs stand behind its head is read
-                     to there, the step goes as far, and the rest is read at the next step, never skipped;
+                     to there, the step goes as far, and the rest is read at the next step, never skipped within the
+                     catch-up;
   a stop reached   → `fillTrigger` signed and sent at once, with a fixed gas, no reads before it and no wait for its
                      receipt: the receipt is looked at in the next blocks. A stop the exam refused once is tried with an
                      `eth_call` first the next time (the book past the ceiling, say), as before;
@@ -330,14 +331,16 @@ class Node:
 
     @staticmethod
     def _said(resp) -> str:
-        """The error an answer of HTTP 4xx carries, as ": <message>" cut to 200 with every address scrubbed; "" when it
-        carries none that parses."""
+        """The error an answer of HTTP 4xx carries, as ": <message>" cut to 200, every address in it taken out whole
+        (a provider's key may be its host name, which `scrub` keeps); "" when it carries none that parses."""
         try:
             error = resp.json().get("error")
         except Exception:
             return ""
         text = error.get("message") if isinstance(error, dict) else error
-        return f": {scrub(str(text))[:200]}" if text else ""
+        if not text:
+            return ""
+        return f": {scrub(re.sub(r'[a-z][a-z0-9+.-]*://[^\s<>]+', '<url>', str(text), flags=re.IGNORECASE))[:200]}"
 
 
 # ── the key's one sender ─────────────────────────────────────────────────────────────
@@ -1129,23 +1132,31 @@ class StopLoop:
             # block's, and are not asked for again.
             self.unstepped[head] = cache[head]
         by_block, top = self._logs(accounts, pools, lo, head)
-        # The blocks behind the read-back that this step reaches: their events are read, not their prices.
+        # The blocks behind the read-back that this step reaches: their events are read, and their prices only where a
+        # look of the loop's own read them (kept while the node's logs stood behind); the others are a gap, each run of
+        # them said as the step comes to it, in block order.
         gap_to = min(price_lo - 1, top)
-        gap_said = self._ran_ahead(lo, gap_to)
+        gap_said, gap_end = False, lo - 1
         for b in range(lo, top + 1):
+            priced_here = b > gap_to or b in cache
+            if not priced_here and b > gap_end:
+                gap_end = b
+                while gap_end < gap_to and gap_end + 1 not in cache:
+                    gap_end += 1
+                gap_said = self._ran_ahead(b, gap_end) or gap_said
             if self.unread_signs:  # read again at the block before, inside the step too: no block judged without them
                 self._read_signs_again(b - 1)
             due: list = []
             prices = None
-            if b >= price_lo:
+            if priced_here:
                 prices = cache.get(b)
-                if prices is None or set(prices) != self._wanted():
+                if b >= price_lo and (prices is None or set(prices) != self._wanted()):
                     prices = self._prices(b, prices)  # a busy node ends the step here; the next one starts at this block
-            if b >= price_lo and prices is None:
+            if priced_here and prices is None:
                 # With Multicall3: the node did not answer for this very block by its number. No line of it, a gap:
                 # a price of another block is never written under this one's number.
                 self._unseen(b)
-            elif b >= price_lo:
+            elif priced_here:
                 cache[b] = prices
                 if self.multicall:
                     self._sight(b, prices)
@@ -1165,11 +1176,11 @@ class StopLoop:
                 if t is not None and t["touch"] is not None and not t["said"]:
                     t["said"] = True
                     self._raise("stop_overdue", key, t, b, "reached and not carried out yet")
-            if b <= gap_to and not gap_said and any(t["armed"] <= gap_to and self.signs.get(k[:2]) != 0
-                                                    for k, t in self.triggers.items()):
+            if not priced_here and not gap_said and any(t["armed"] <= gap_end and self.signs.get(k[:2]) != 0
+                                                        for k, t in self.triggers.items()):
                 # A stop set inside the blocks not read, armed in them: the same gap, said as soon as it is known.
                 gap_said = True
-                self._alarm_again("stop_watch_gap", from_block=lo, to=gap_to, standing=len(self.triggers),
+                self._alarm_again("stop_watch_gap", from_block=lo, to=gap_end, standing=len(self.triggers),
                                   why="a stop was set and armed inside blocks whose prices the loop did not read")
             self.block = b
             if self.held:
@@ -2035,6 +2046,9 @@ class StopLoop:
         log("stop_look_unconfirmed", block=look.block, t=look.t, recorded=recorded, why=why or "held once a minute",
             then="measured again; this look the old way")
         self.looked.clear()  # looks since the last that held may be of other blocks than their numbers: none kept
+        for b in self.unstepped:  # nor the prices kept for a block the steps have not reached: read again by number
+            self.asked.pop(b, None)
+        self.unstepped.clear()
         was = self.ahead
         self.ahead_was, self.ahead = was, None
         try:

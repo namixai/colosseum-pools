@@ -732,9 +732,11 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
   to the keeper's fast loop, which asks the node for no head and no logs of its own. The read goes in the width the
   node takes: 50 blocks at most, and a node that takes fewer (Alchemy's free plan takes 10) says so by refusing, the
-  window is narrowed, down to one block, and the width it took is kept (tried at 50 again an hour on). It goes as
-  far as the node's logs reach: a node whose logs stand a block or two behind its head is read to there and the rest
-  at the next step, which is no failure, and no block is ever skipped;
+  window is narrowed, down to one block, and the width it took is kept (tried again an hour on at the widest read,
+  `--stop-log-window`, 50 when empty). It goes as far as the node's logs reach: a node whose logs stand a block or two
+  behind its head is read to there and the rest at the next step, which is no failure; within the 1 000 blocks of
+  the catch-up no block is skipped (past them the loop says it lost the thread, below), and the prices a look read
+  of a block the steps had not reached yet are its line when they do;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);
@@ -780,7 +782,8 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   its cause raises again at each step (`stop_watch_lost`, `stop_watch_gap`, `stop_watch_blind_long`,
   `stop_numbering_changed`, `stop_loop_dead`) is raised once in ten minutes at most, the next one saying how many
   were not; a stop's own alarms are each raised. The keeper's fast loop takes its blocks from this loop alone, and
-  says so when none came for 30 seconds (`keeper_unfed`): no order is filled meanwhile. A line `stop_loop_alive`
+  says so when none came for 30 seconds (`keeper_unfed`): no order placed meanwhile is sent a fill (one sent before
+  may still land). A line `stop_loop_alive`
   every minute says it works, with the requests it asked of its node since the last, by method, the width of
   `eth_getLogs` the node takes and the steps its logs ended short of the head in (`keeper_alive` is the keeper's own).
 

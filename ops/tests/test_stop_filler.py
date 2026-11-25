@@ -2660,17 +2660,53 @@ class TheNodesLimits(Base):
         self.assertNotIn((EXAM, BTC, False), loop.triggers, "its TriggerFilled read")
         self.assertEqual((len(self.node.raw), loop.landed), (1, {}))
 
+    def test_prices_a_look_read_of_blocks_behind_the_read_back_are_their_lines_not_a_gap(self):
+        """The node's logs stood further behind than the read-back of prices: the blocks the step then reaches are behind
+        it too, but each was looked at as the head, and its look's prices are its line (review of #349)."""
+        if not self.MULTICALL:
+            return  # the old way's looks read no prices
+        self.node = LimitedNode(limit=50)
+        loop = self.loop(wallet=None, backfill=3)
+        self.run_to(loop, 100)
+        self.node.lag = 5
+        for h in range(101, 111):
+            self.node.price[h] = 900_000 + h
+            self.run_to(loop, h)
+        self.node.lag = 0
+        self.run_to(loop, 111)
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual(sorted(journal.px[BTC]), list(range(100, 112)), "a line for every block looked at")
+        self.assertEqual({b: px for b, px in journal.px[BTC].items() if b > 100}, {b: self.node.oracle(b) for b in range(101, 112)})
+        self.assertEqual(journal.gaps, [])
+        self.assertEqual(self.events("stop_watch_blind"), [])
+
+    def test_prices_kept_for_a_block_ahead_are_dropped_when_a_look_does_not_hold(self):
+        """A look that does not hold says the numbering may have moved: the prices kept for blocks the steps have not
+        reached may be another block's, and are read again by number (review of #349)."""
+        if not self.MULTICALL:
+            return
+        self.node = LimitedNode(limit=50, lag=2)
+        loop = self.loop(wallet=None)
+        self.node.lag = 0
+        self.run_to(loop, 100)
+        self.node.lag = 2
+        self.run_to(loop, 101, 102)
+        self.assertEqual(sorted(loop.unstepped), [101, 102])
+        loop._checked(sf.Look(103, self.node.time_of(102), {}, frozenset()))  # the time of another block
+        self.assertEqual(loop.unstepped, {})
+        self.assertFalse({101, 102} & set(loop.asked))
+
     def test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address(self):
         node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
         answer = mock.Mock(status_code=400)
         answer.json.return_value = {"jsonrpc": "2.0", "id": 1, "error": {
             "code": -32600, "message": "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block "
-                                       "range. See http://127.0.0.1:9/v2/SECRETKEY/docs"}}
+                                       "range. See http://127.0.0.1:9/v2/SECRETKEY/docs and https://SECRETKEY.example.invalid/x"}}
         with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
             node.call("eth_getLogs", [{}])
         said = str(caught.exception)
         self.assertTrue(said.startswith("eth_getLogs: HTTP 400: Under the Free tier plan"), said)
-        self.assertNotIn("SECRETKEY", said)
+        self.assertNotIn("secretkey", said.lower(), "neither in a path nor as a host name")
         self.assertEqual(sk.named_width(said, 50), 10)
         answer.json.side_effect = ValueError("not JSON")
         with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:

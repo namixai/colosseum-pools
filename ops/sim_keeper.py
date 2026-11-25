@@ -983,8 +983,8 @@ class SimKeeper:
             return
         self.unfed_said = True
         self.stop_loop.alarm("keeper_unfed", seconds=int(waited), block=self.fast_block, orders=len(self.orders),
-                             why="the fast loop takes its blocks from the stops' loop, and none came: no order is filled "
-                                 "until one does (see the stops' loop's own alarms)")
+                             why="the fast loop takes its blocks from the stops' loop, and none came: no order placed "
+                                 "meanwhile is sent a fill until one does (see the stops' loop's own alarms)")
 
     def _own_logs(self, query: dict, lo: int, hi: int) -> list[dict]:
         """The fast loop's own read of blocks `lo` to `hi`, in windows the keeper's node takes (`LogWindow`): the
