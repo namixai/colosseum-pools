@@ -991,7 +991,10 @@ class SimKeeper:
         blocks before the stops' loop's first step after a start are fifty, which a node of a narrower limit refuses
         in one read, and the fast loop would stand on them for good. A read the node's logs ended in before `hi`
         raises, and the next step reads it again from `lo`: the fast loop's block moves only with every block read."""
-        got, top = self.logs.read(c.rpc, query, lo, hi, passes=(requests.ConnectionError,), unsure=(requests.Timeout,))
+        # A busy node is raised as it comes: a narrower window would only ask it more (c.rpc's own ladder of HTTP 429
+        # ends in "rate limited", raised as it comes too).
+        got, top = self.logs.read(c.rpc, query, lo, hi, passes=(requests.ConnectionError, c.NodeBusy),
+                                  unsure=(requests.Timeout,))
         if top < hi:
             raise RuntimeError(f"eth_getLogs: the node's logs end at block {top}, before {hi}; read again next time")
         return got

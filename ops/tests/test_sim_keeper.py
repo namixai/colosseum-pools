@@ -1121,6 +1121,13 @@ class OneLookForBothLoops(unittest.TestCase):
         self.assertEqual(sorted(b for lo, hi in read for b in range(lo, hi + 1)), list(range(451, 500)), "each block once")
         self.assertEqual((sk.fast_block, sk.logs.width), (500, 10))
 
+    def test_the_fast_loops_own_read_raises_a_busy_node_as_it_comes(self):
+        sk = self.keeper()
+        busy = mock.Mock(side_effect=k.c.NodeBusy("eth_getLogs: HTTP 429"))
+        with mock.patch.object(k.c, "rpc", busy), self.assertRaises(k.c.NodeBusy):
+            sk._own_logs({"address": [self.EXAM], "topics": [[k.PLACED]]}, 451, 499)
+        self.assertEqual((busy.call_count, sk.logs.width), (1, k.MAX_LOG_WINDOW), "asked once, not in narrower windows")
+
     def test_no_step_handed_in_for_long_is_an_alarm_once_and_one_handed_in_again_is_said(self):
         """The stops' loop stood (testnet, 25 November 2026), and the fast loop, which takes its blocks from it alone,
         stood with it in silence: keeper_alive said one block for as long. Now it says so."""
