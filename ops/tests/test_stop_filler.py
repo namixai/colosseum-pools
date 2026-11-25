@@ -2695,6 +2695,7 @@ class TheNodesLimits(Base):
         loop._checked(sf.Look(103, self.node.time_of(102), {}, frozenset()))  # the time of another block
         self.assertEqual(loop.unstepped, {})
         self.assertFalse({101, 102} & set(loop.asked))
+        self.assertFalse({101, 102} & set(loop.head_t), "nor their time, which a line read again would keep")
 
     def test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address(self):
         node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
@@ -2777,6 +2778,20 @@ class TheFirstLookAndTheSide(Base):
         self.run_to(loop, 100, 101)
         asked = [p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"]
         self.assertEqual(asked, [hex(100)] if self.MULTICALL else [])
+
+    def test_a_busy_node_at_the_first_looks_check_leaves_the_check_due(self):
+        """The first look's check met a busy node: the look fails, and the next one is held instead, not a minute later
+        (review of #349)."""
+        if not self.MULTICALL:
+            return
+        loop = self.loop(wallet=None)
+        self.node.busy = {"eth_getBlockByNumber"}
+        with self.assertRaises(c.NodeBusy):
+            self.run_to(loop, 100)
+        self.node.busy = set()
+        before = len(self.node.calls)
+        self.run_to(loop, 101)
+        self.assertIn(("eth_getBlockByNumber", [hex(101), False]), self.node.calls[before:])
 
     def test_a_wrong_measure_at_the_start_loses_no_event(self):
         """L1: measured 0 where the node numbers a call as the next block (a measure that met the coincidences it asks

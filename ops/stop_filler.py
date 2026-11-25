@@ -2033,21 +2033,22 @@ class StopLoop:
         if why is None and now - self.confirmed_at < CONFIRM_EVERY_S:
             self._keep(look)
             return look
-        self.confirmed_at = now
         try:
             recorded = sk.block_time(self.node.call, look.block)
         except (c.NodeBusy, Unsure, Unreached):
-            raise
+            raise  # not held: the check stays due, and the next look is held (review of #349)
         except Exception:
             recorded = None
+        self.confirmed_at = now
         if recorded == look.t:
             self._keep(look)
             return look
         log("stop_look_unconfirmed", block=look.block, t=look.t, recorded=recorded, why=why or "held once a minute",
             then="measured again; this look the old way")
         self.looked.clear()  # looks since the last that held may be of other blocks than their numbers: none kept
-        for b in self.unstepped:  # nor the prices kept for a block the steps have not reached: read again by number
-            self.asked.pop(b, None)
+        for b in self.unstepped:  # nor the prices kept for a block the steps have not reached: read again by number,
+            self.asked.pop(b, None)  # and their time with them, which the line would otherwise keep
+            self.head_t.pop(b, None)
         self.unstepped.clear()
         was = self.ahead
         self.ahead_was, self.ahead = was, None
