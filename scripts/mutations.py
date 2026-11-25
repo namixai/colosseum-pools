@@ -17922,9 +17922,8 @@ MUTATIONS = [
      "            priced_here = b > gap_to",
      ["test_prices_a_look_read_of_blocks_behind_the_read_back_are_their_lines_not_a_gap"]),
     ("SF174", "ops/stop_filler.py",
-     "        for b in self.unstepped:  # nor the prices kept for a block the steps have not reached: read again by number,\n"
-     "            self.asked.pop(b, None)  # and their time with them, which the line would otherwise keep\n"
-     "            self.head_t.pop(b, None)\n        self.unstepped.clear()\n",
+     "        for kept in (self.unstepped, self.asked, self.head_t):\n"
+     "            for b in [b for b in kept if b > self.block]:\n                del kept[b]\n",
      "",
      ["test_prices_kept_for_a_block_ahead_are_dropped_when_a_look_does_not_hold"]),
     ("SF175", "ops/stop_filler.py",
@@ -17932,8 +17931,8 @@ MUTATIONS = [
      "scrub(str(text))[:200]",
      ["test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address"]),
     ("SF176", "ops/stop_filler.py",
-     "            self.head_t.pop(b, None)\n        self.unstepped.clear()\n",
-     "        self.unstepped.clear()\n",
+     "        for kept in (self.unstepped, self.asked, self.head_t):\n",
+     "        for kept in (self.unstepped, self.asked):\n",
      ["test_prices_kept_for_a_block_ahead_are_dropped_when_a_look_does_not_hold"]),
     ("SF177", "ops/stop_filler.py",
      "            raise  # not held: the check stays due, and the next look is held (review of #349)\n"

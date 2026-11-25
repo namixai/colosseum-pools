@@ -731,12 +731,12 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   fills that move a position, exams sold and ended), and the comparison made by the loop itself, not one `eth_call`
   a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
   to the keeper's fast loop, which asks the node for no head and no logs of its own. The read goes in the width the
-  node takes: 50 blocks at most, and a node that takes fewer (Alchemy's free plan takes 10) says so by refusing, the
-  window is narrowed, down to one block, and the width it took is kept (tried again an hour on at the widest read,
-  `--stop-log-window`, 50 when empty). It goes as far as the node's logs reach: a node whose logs stand a block or two
-  behind its head is read to there and the rest at the next step, which is no failure; within the 1 000 blocks of
-  the catch-up no block is skipped (past them the loop says it lost the thread, below), and the prices a look read
-  of a block the steps had not reached yet are its line when they do;
+  node takes: at most the widest read (`--stop-log-window`, 50 blocks by default), and a node that takes fewer
+  (Alchemy's free plan takes 10) says so by refusing, the window is narrowed, down to one block, and the width it
+  took is kept (tried again at the widest read an hour on). It goes as far as the node's logs reach: a node whose logs
+  stand a block or two behind its head is read to there and the rest at the next step, which is no failure; within the
+  1 000 blocks of the catch-up no block is skipped (past them the loop says it lost the thread, below), and the prices
+  a look read of a block the steps had not reached yet are its line when they do;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);

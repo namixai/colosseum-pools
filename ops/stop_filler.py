@@ -2046,10 +2046,11 @@ class StopLoop:
         log("stop_look_unconfirmed", block=look.block, t=look.t, recorded=recorded, why=why or "held once a minute",
             then="measured again; this look the old way")
         self.looked.clear()  # looks since the last that held may be of other blocks than their numbers: none kept
-        for b in self.unstepped:  # nor the prices kept for a block the steps have not reached: read again by number,
-            self.asked.pop(b, None)  # and their time with them, which the line would otherwise keep
-            self.head_t.pop(b, None)
-        self.unstepped.clear()
+        # Nor anything kept of a block the steps have not reached (its look's prices, the assets asked, its time, kept
+        # by a step that failed too): read again by number, with its own time. A block stepped keeps its line's.
+        for kept in (self.unstepped, self.asked, self.head_t):
+            for b in [b for b in kept if b > self.block]:
+                del kept[b]
         was = self.ahead
         self.ahead_was, self.ahead = was, None
         try:

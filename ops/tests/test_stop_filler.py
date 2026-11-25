@@ -2692,10 +2692,12 @@ class TheNodesLimits(Base):
         self.node.lag = 2
         self.run_to(loop, 101, 102)
         self.assertEqual(sorted(loop.unstepped), [101, 102])
+        loop.head_t[103] = self.node.time_of(104)  # kept by a look whose step failed before it kept its prices
         loop._checked(sf.Look(103, self.node.time_of(102), {}, frozenset()))  # the time of another block
         self.assertEqual(loop.unstepped, {})
         self.assertFalse({101, 102} & set(loop.asked))
-        self.assertFalse({101, 102} & set(loop.head_t), "nor their time, which a line read again would keep")
+        self.assertFalse({101, 102, 103} & set(loop.head_t), "nor their time, which a line read again would keep")
+        self.assertEqual(loop.head_t[100], self.node.time_of(100), "a block stepped keeps its line's time")
 
     def test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address(self):
         node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
