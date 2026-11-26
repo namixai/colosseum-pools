@@ -32,5 +32,6 @@ export function lineStates({ on, free, closed = false }) {
   });
 }
 
-/** The lines the first pool opens with: 5 000, 10 000 and 25 000 on, on all four tiers, the larger off. */
+/** The lines on in this made-up pool: 5 000, 10 000 and 25 000, on all four tiers, the larger off (the first pool itself
+ * opens with 5 000 and 10 000 alone, deployments/plans/sim-first-pool.json). */
 export const FIRST_ON = [...Array(12).keys()];

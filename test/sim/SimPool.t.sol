@@ -3249,8 +3249,8 @@ contract SimPoolTest is Test {
 
     /// The first pool's plan: 5 000, 10 000, 25 000, 50 000, 100 000 and 250 000 on the loss limits 3, 4, 5 and 6 %,
     /// at the CFO's prices (a size of 50 000 and up at its size / 10 000 times the price of 10 000), BTC, ETH and SOL
-    /// each at its own cap, one step, trailing to the start; 4 000 locked, the lines up to 25 000 on (CFO, Alex,
-    /// 16 November).
+    /// each at its own cap, one step, trailing to the start; 1 600 locked, two payouts of 10 000, and the lines up to
+    /// 10 000 on (Alex, 11 November; the plan of 25 November).
     function _firstPlan() internal returns (SimPlan memory p) {
         p = _plan();
         _threeAssets(p);
@@ -3265,8 +3265,8 @@ contract SimPoolTest is Test {
             p.menu[i] = SimSize({size: size[i / 4], price: pr});
             p.tiers[i] = SimTier({maxDrawdownBps: dd[i % 4], targetBps: target[i % 4], drawdownKind: 1});
         }
-        p.locked = 4_000e6;
-        p.on = 0xfff;
+        p.locked = 1_600e6;
+        p.on = 0xff;
     }
 
     /// The gas of `create` as a transaction: what the call spends, the base of 21 000 and the calldata (EIP-2028).
@@ -3315,7 +3315,7 @@ contract SimPoolTest is Test {
         (uint256 g, SimPool pool) = _createGas(_firstPlan());
         emit log_named_uint("create, first plan (24 lines), as a transaction", g);
         assertEq(pool.menu().length, 24);
-        assertEq(pool.onMask(), 0xfff, "5 000, 10 000 and 25 000 on, the rest off");
+        assertEq(pool.onMask(), 0xff, "5 000 and 10 000 on, the rest off");
         assertLe(g, CREATE_GAS_GATE, "two thirds of a small block at most");
     }
 
@@ -3336,9 +3336,9 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         pool.setCode(CODE, partner, 0);
         uint256 g = gasleft();
-        PaperExam e = _buy(pool, trader, 11);
+        PaperExam e = _buy(pool, trader, 7);
         g -= gasleft();
-        emit log_named_uint("buy, line 11 (with deal and approve)", g);
+        emit log_named_uint("buy, line 7 (with deal and approve)", g);
         assertLe(g, CREATE_GAS_GATE, "two thirds of a small block at most");
         assertEq(e.rules().assets.length, 3);
     }
@@ -3404,6 +3404,8 @@ contract SimPoolTest is Test {
         p.fundedRules =
             Rules({dailyLossBps: 400, maxDrawdownBps: 600, maxLeverageX100: 500, assets: btcEth, assetLeverageX100: caps});
         p.tiers[5].drawdownKind = 0; // one line from the start
+        p.on = 0xfff; // the twelve lines up to 25 000 on, with two payouts of 25 000 locked
+        p.locked = 4_000e6;
         SimPool pool = _open(p);
         PaperExam[12] memory exams;
         for (uint256 i = 0; i < 12; ++i) {
@@ -3484,24 +3486,28 @@ contract SimPoolTest is Test {
         assertEq(sh, short, "short");
     }
 
-    /// The first pool: 4 000 locked, so the lines up to 25 000 are on (two payouts of 2 000 at most) and the larger
-    /// ones are off, each short of its two payouts by what 4 000 lacks; the floor is three payouts of 25 000.
+    /// The first pool: 1 600 locked, so the lines up to 10 000 are on (two payouts of 800 at most) and the larger
+    /// ones are off, each short of its two payouts by what 1 600 lacks; the floor is three payouts of 10 000.
     function test_lines_theFirstPool_onAtTheStartWhatItsLockCovers() public {
         uint256 before = usdc.balanceOf(creator);
         SimPool pool = _firstPool();
-        assertEq(before - usdc.balanceOf(creator), 4_000e6, "the creator locks what the plan says");
-        assertEq(pool.principal(), 4_000e6);
-        assertEq(pool.free(), 4_000e6);
-        uint256[6] memory short = [uint256(0), 0, 0, 4_000e6, 12_000e6, 36_000e6];
+        assertEq(before - usdc.balanceOf(creator), 1_600e6, "the creator locks what the plan says");
+        assertEq(pool.principal(), 1_600e6);
+        assertEq(pool.free(), 1_600e6);
+        uint256[6] memory short = [uint256(0), 0, 2_400e6, 6_400e6, 14_400e6, 38_400e6];
         for (uint256 i = 0; i < 24; ++i) {
-            bool on = i < 12;
+            bool on = i < 8;
             _lineState(pool, i, on, on, on, short[i / 4]);
         }
-        assertEq(pool.floor(), 6_000e6, "three payouts of 2 000");
+        assertEq(pool.floor(), 2_400e6, "three payouts of 800");
         assertEq(pool.withdrawable(), 0);
         assertEq(pool.largestPayout(), 20_000e6, "the menu's largest, off or on");
-        _buyRefused(pool, trader, 12, abi.encodeWithSelector(SimPool.LineOff.selector));
-        _buy(pool, trader, 11);
+        _buyRefused(pool, trader, 8, abi.encodeWithSelector(SimPool.LineOff.selector));
+        _buy(pool, trader, 7);
+        // 25 000 is switched on only with its two payouts of 2 000 free: 2 400 short of them at the start.
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(SimPool.NotCovered.selector, 2_400e6 - (95e6 - 475_000)));
+        pool.setLine(8, true);
     }
 
     function test_lines_onlyTheCreatorSwitchesALineOn_onlyWithTwoPayoutsFree_neverByItself() public {
@@ -3510,7 +3516,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.NotCreator.selector);
         pool.setLine(12, true);
         vm.prank(creator);
-        vm.expectRevert(abi.encodeWithSelector(SimPool.NotCovered.selector, 4_000e6));
+        vm.expectRevert(abi.encodeWithSelector(SimPool.NotCovered.selector, 6_400e6));
         pool.setLine(12, true);
         // The money is there, as if prices came in: the line may be switched on, and still is not.
         deal(address(usdc), address(pool), 1_000_000e6);
@@ -3521,7 +3527,7 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         pool.setLine(12, true);
         _lineState(pool, 12, true, true, true, 0);
-        assertEq(pool.onMask(), 0x1fff);
+        assertEq(pool.onMask(), 0x10ff);
         PaperExam e = _buy(pool, trader, 12);
         assertEq(e.terms().capital, 50_000e6);
         vm.startPrank(creator);
@@ -3536,14 +3542,14 @@ contract SimPoolTest is Test {
 
     function test_lines_createRefusesALineTheLockDoesNotCover_andALockUnderTwoOfTheSmallest() public {
         SimPlan memory p = _firstPlan();
-        p.on = 0x1fff; // 50 000 on: two payouts of 4 000, and 4 000 locked
+        p.on = 0x1ff; // 25 000 on: two payouts of 2 000, and 1 600 locked
         vm.expectRevert(SimPoolFactory.BadPlan.selector);
         factory.check(p);
         vm.prank(creator);
         vm.expectRevert(SimPoolFactory.BadPlan.selector);
         factory.create{value: 1 ether}(p);
-        p.on = 0xfff;
-        p.locked = 3_999_999_999; // a cent short of two payouts of 25 000
+        p.on = 0xff;
+        p.locked = 1_599_999_999; // a unit short of two payouts of 10 000
         vm.expectRevert(SimPoolFactory.BadPlan.selector);
         factory.check(p);
         p.on = 0;

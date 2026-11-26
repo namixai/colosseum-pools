@@ -30,8 +30,8 @@ fail, and their prices pay for the ones that pass.
   platform, and
   the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
   smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
-  lines whose two payouts the lock covers; the others start off. The first pool locks 4 000: 5 000, 10 000 and
-  25 000 on, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
+  lines whose two payouts the lock covers; the others start off. The first pool locks 1 600, two payouts of
+  10 000 (Alex, 11 November 2026): 5 000 and 10 000 on, 25 000, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
   tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
   trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
   pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
@@ -430,7 +430,7 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `deployments/plans/sim-first-pool.json`: 24 lines, the sizes 5 000, 10 000, 25 000, 50 000, 100 000 and
   250 000 each on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10 % at the CFO's prices, each line's loss limit
   trailing the highest daily snapshot up to the starting balance (`drawdown_kind` 1), payout 8 % of the size, two
-  payouts a day, 4 000 locked (`locked_usdc`), the lines of 5 000, 10 000 and 25 000 on and the larger ones off
+  payouts a day, 1 600 locked (`locked_usdc`), the lines of 5 000 and 10 000 on and the larger ones off
   (`on`) until the creator switches them on with two of their payouts free; thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
@@ -721,14 +721,31 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   at the start, twice and taken when the two agree, and its number counted back. A look that gives a reason to
   doubt its number (a block seen before with another time, a new one with the last look's time, blocks skipped),
   and any look once a minute, is held against the node's own record of its block; one that does not hold makes no
-  step by its number: the numbering is measured again at once and that look is the head and a call a price. A price
+  step by its number: the numbering is measured again at once and that look is the head and a call a price (a
+  measure that fails is tried again ten seconds on, not at every look, and the looks between are made that way;
+  the first look after a start is held against the node's record too). A check the node does not answer (busy, a
+  server's error, not reached) holds nothing and finds nothing wrong: that look and the ones due till it is asked
+  again ten seconds on are the head and a call a price, and the loop steps on. A look counts as blocks skipped only
+  when it comes more than one block past the last look, not past the last block stepped. A price
   read in the call after one that failed (and may have burned its gas) is asked again alone. If the call fails
   whole, that one look is the head and then a call a price, as before; without Multicall3 on the chain every look
   is (and on mainnet the loop does not start);
 - every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the
   fills that move a position, exams sold and ended), and the comparison made by the loop itself, not one `eth_call`
   a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
-  to the keeper's fast loop, which asks the node for no head and no logs of its own;
+  to the keeper's fast loop, which asks the node for no head and no logs of its own. The read goes in the width the
+  node takes: at most the widest read (`--stop-log-window`, 50 blocks by default), and a node that takes fewer
+  (Alchemy's free plan takes 10) says so by refusing, the window is narrowed, down to one block, and the width it
+  took is kept (tried again at the widest read an hour on). Only a refusal whose words speak of the range of blocks
+  narrows it, and only one of the full width kept, or one naming a narrower width, teaches it; any other error (a
+  server's, a timeout, a busy node, an HTTP 408 or 429) ends the step as it comes, and the windows read before it are
+  kept, the step going as far as they reach. No word of the node's own goes into an error, a line or an alarm, only the
+  width it names. It goes as far as the node's logs reach: a node whose logs
+  stand a block or two behind its head is read to there and the rest at the next step, which is no failure; within the
+  1 000 blocks of the catch-up no block is skipped (past them the loop says it lost the thread, below), and the prices
+  a look read of a block the steps had not reached yet are its line when they do. A stop reached at the head is sent
+  on the head's prices before that block's events are read: one the trader took off in that very block is refused by
+  the exam and costs its gas, and is never carried out twice;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);
@@ -770,13 +787,22 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
 - the keeper's loop checks that the thread is there and moving: one that ended is an alarm and is started again,
   one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds (one alarm an
   hour at most, the episodes between said as lines) and 30 blocks without prices while a stop stands. An alarm's own
-  reads (whether the exam was over) are made after the step's stops went out. A line `stop_loop_alive` every minute
-  says it works, with the requests it asked of its node since the last, by method (`keeper_alive` is the keeper's own).
+  reads (whether the exam was over) are made after the step's stops went out. An alarm of the loop's health that
+  its cause raises again at each step (`stop_watch_lost`, `stop_watch_gap`, `stop_watch_blind_long`,
+  `stop_numbering_changed`, `stop_loop_dead`) is raised once in ten minutes at most, each one between a line of its
+  own (`held_back`), the next alarm saying how many were not; a stop's own alarms are each raised. The keeper's fast
+  loop takes its blocks from this loop alone, and says so when none came for 30 seconds (`keeper_unfed`), or when
+  they came and its own step failed on each for as long (`keeper_stuck`): no order placed meanwhile is sent a fill
+  (one sent before may still land). A line `stop_loop_alive`
+  every minute says it works, with the requests it asked of its node since the last, by method, the width of
+  `eth_getLogs` the node takes and the steps its logs ended short of the head in (`keeper_alive` is the keeper's own).
 
-Three settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
+Four settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
 loop reads through and the key's transactions go to, the keeper's own when empty; `--stop-tip-gwei`
-(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty; and `--stop-poll`
-(COLOSSEUM_STOP_POLL), the seconds between two looks at the head, half a second when empty. On mainnet the stops'
+(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty; `--stop-poll`
+(COLOSSEUM_STOP_POLL), the seconds between two looks at the head, half a second when empty; and `--stop-log-window`
+(COLOSSEUM_STOP_LOG_WINDOW), the widest `eth_getLogs` asked for, 50 blocks when empty, which a node that takes
+fewer does not need: its refusal teaches the loop its width. On mainnet the stops'
 node must not be the gateway's, as the keeper's must not. What all of it asks of a node is counted in
 docs/HOSTING.md.
 
@@ -883,8 +909,17 @@ The fill window of a plan is fixed at creation, so it is measured first, on a po
 the widest window, 60 blocks, so a late fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
 Its terms say testnet, so mainnet refuses it; mainnet's is `deployments/plans/sim-measure-pool-999.json`, the same
 plan with its network named (`"network": "mainnet"`: `pool` and `check` refuse a plan that names another network than
-theirs, so testnet refuses it) and the opening of its terms without testnet's words, saying trading exams where
-testnet's says a simulated pool and paper exams (the site shows the terms, and says neither). Once measured, the pool's line
+theirs, so testnet refuses it), the opening of its terms without testnet's words, saying trading exams where
+testnet's says a simulated pool and paper exams (the site shows the terms, and says neither), and a smaller line: 200
+for 2, so it locks 32 USDC of our own and not 160 (25 November 2026). Its terms say surplus where testnet's say profit, as the first pool's do.
+
+If a `deploy` is killed before its `finally` runs, the deployer's wallet stays on big blocks. On any network, including mainnet,
+`spike/.venv/bin/python -m ops.deploy_sim big-blocks-off --network mainnet [--operator deployer] [--send]` switches it back (the same call as the
+`finally`, nothing else; without `--send` it only says what it would do; on mainnet `--send` takes the usual terminal phrase
+and the chain-id check). `ops/deploy_multi.py --big-blocks-off` is testnet only. Not smaller: 100 orders of 12 units of BTC
+(7 USDC each at 58 500) cost about 0.5 USDC at mainnet's book, 5 bp from the oracle, and 5.6 USDC were the book to
+stand at the 150 bp ceiling on the trader's side all run long; both are under the 3 % daily loss of 200, 6 USDC,
+and a breach would end the exam halfway through the measure. Once measured, the pool's line
 goes off (`deploy_sim line --off`): the exam bought runs on and nothing more is sold.
 
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send

@@ -790,13 +790,16 @@ and, when `COLOSSEUM_ALERT_CMD` is set, to that command, as the watchdogs' do. I
 `keeper-<name>.env` and each the old behaviour when not set: `COLOSSEUM_STOP_RPC_URL`, a node for the stops and the
 key's transactions (the keeper's node when empty; on mainnet not the gateway's); `COLOSSEUM_STOP_TIP_GWEI`, the
 stops' priority fee (zero when empty); `COLOSSEUM_STOP_POLL`, the seconds between two looks at the head (0.5 when
-empty: two looks a second, so that no block of a second goes by between two; `1` halves the looks).
+empty: two looks a second, so that no block of a second goes by between two; `1` halves the looks);
+`COLOSSEUM_STOP_LOG_WINDOW`, the widest `eth_getLogs` the loop asks for (50 blocks when empty; a node that takes
+fewer, as Alchemy's free plan takes 10, needs no setting: its refusal narrows the window and the width it took is
+kept).
 
 What the keeper asks of its node, on a node paid by the request. A look at the head is one `eth_call`: Multicall3's
 `aggregate3` at `latest` (it stands at `0xcA11bde05977b3631167028862bE2a173976CA11` on both networks) answers with
 the block's number, its time and the oracle price of every platform asset and every asset with a stop standing, all
 of one state, and the journal's line takes its number and its time from that call. There is one `eth_getLogs` a block
-(one for each 50 blocks read back), and it serves the stops and the orders alike: the keeper's fast loop takes its
+(one for each 50 blocks read back, or for each width the node takes), and it serves the stops and the orders alike: the keeper's fast loop takes its
 head and its logs from the stops' loop and asks for neither. The slow pass, every 30 seconds, asks the head (with its
 time, one `eth_getBlockByNumber`), the scan's `eth_getLogs`, and its reads of the pools and the accounts in batches
 of at most 100 through the same

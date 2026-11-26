@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ops import deploy_sim as d
+from ops import deploy_testnet as dt
 from ops import sim_check as chk
 from ops import sim_keeper as sk
 from ops import sim_network as sn
@@ -244,7 +245,7 @@ class TheDeployScript(unittest.TestCase):
         self.assertIn("written for testnet", str(caught.exception))
 
     def test_mainnet_opens_the_measuring_pool_of_its_own_plan_and_testnet_refuses_it(self):
-        """`pool --signer` with mainnet's measuring plan prints the Safe's three calls: 160 locked, the factory's fee,
+        """`pool --signer` with mainnet's measuring plan prints the Safe's three calls: 32 locked, the factory's fee,
         a window of 60 blocks, mainnet's BTC, ETH and SOL; nothing is sent and no key is read. Testnet refuses it."""
         import io
         from contextlib import redirect_stdout
@@ -260,14 +261,15 @@ class TheDeployScript(unittest.TestCase):
             plan_tuple = d.plan_of(json.loads(pathlib.Path(plan).read_text()), b"\0" * 32)
         key.assert_not_called(), sent.assert_not_called(), tx.assert_not_called()
         said = out.getvalue()
-        self.assertIn("1 sizes 1000 for 9 USDC", said)
-        self.assertIn("locks            160 USDC, pays 1 HYPE (the factory's fee); lines on at the start: 0 ", said)
+        self.assertIn("1 sizes 200 for 2 USDC", said)
+        self.assertIn("locks            32 USDC, pays 1 HYPE (the factory's fee); lines on at the start: 0 ", said)
         self.assertIn("book             at the book, ceiling 150 bp; fill window 60 blocks", said)
         self.assertIn("code             'MEASURE' 0x", said)
         self.assertIn(f"-> {d.to_checksum_address(B)} 0%", said, "the creator's own code, no share")
         txs = json.loads(said[said.index("{"):])["transactions"]
         self.assertEqual([t["to"].lower() for t in txs], [C3, networks.MAINNET.usdc_erc20.lower(), A])
         self.assertEqual([t["value"] for t in txs], ["0", "0", str(10**18)])
+        self.assertTrue(txs[1]["data"].endswith("%064x" % (32 * 10**6)), "the Safe approves the 32 it locks")
         self.assertEqual((plan_tuple[1][3], plan_tuple[3][3]), ([0, 1, 5], [0, 1, 5]), "mainnet's BTC, ETH and SOL")
         with on(networks.TESTNET), mock.patch.object(d.deployments, "load", return_value=record):
             with self.assertRaises(SystemExit) as caught:
@@ -462,6 +464,77 @@ class TheReadsOnMainnet(unittest.TestCase):
         with on(networks.TESTNET) as t, mock.patch.object(d, "close", return_value=0):
             d.main(["close", "--pool", A, "--signer", B])
         t["assert_network"].assert_not_called()  # testnet as before: its sends check, its reads do not
+
+
+class TheBigBlocksOffCommand(unittest.TestCase):
+    """`deploy_sim big-blocks-off`: the call deploy makes in its `finally`, alone, for a deploy that was killed. It works
+    on mainnet, where ops/deploy_multi.py --big-blocks-off refuses. Offline: the exchange is a fake."""
+    ADDR = d.to_checksum_address("0x" + "d1" * 20)
+    ARGV = ["big-blocks-off", "--network", "mainnet"]
+
+    def exchange(self, resp=None):
+        ex = mock.Mock()
+        ex.use_big_blocks.return_value = {"status": "ok"} if resp is None else resp
+        return ex
+
+    def test_without_send_it_says_what_it_would_do_and_does_nothing(self):
+        with on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), mock.patch.object(d.c, "address_of", return_value=self.ADDR), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "exchange") as ex, mock.patch("builtins.print") as out:
+            self.assertEqual(d.main(self.ARGV), 0)
+        text = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        self.assertIn("mainnet (chain 999)", text)
+        self.assertIn(self.ADDR, text)
+        self.assertIn("nothing was sent", text)
+        key.assert_not_called()
+        ex.assert_not_called()
+
+    def test_the_chain_id_is_checked_before_anything_on_mainnet(self):
+        with on(networks.MAINNET), mock.patch.object(d.c, "assert_network", side_effect=SystemExit("chain id")) as chain, \
+                mock.patch.object(d.c, "exchange") as ex:
+            with self.assertRaises(SystemExit):
+                d.main(self.ARGV)
+        chain.assert_called()
+        ex.assert_not_called()
+
+    def test_mainnet_send_needs_a_terminal_and_the_phrase(self):
+        for tty, typed, said in ((False, "", "without a terminal"), (True, "yes", "not confirmed")):
+            with on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), mock.patch("sys.stdin.isatty", return_value=tty), \
+                    mock.patch("builtins.input", return_value=typed), mock.patch("builtins.print"), \
+                    mock.patch.object(d.c, "address_of", return_value=self.ADDR), \
+                    mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "exchange") as ex:
+                with self.assertRaises(SystemExit) as caught:
+                    d.main([*self.ARGV, "--send"])
+            self.assertIn(said, str(caught.exception))
+            key.assert_not_called()
+            ex.assert_not_called()
+
+    def test_a_confirmed_send_switches_the_deployers_wallet_to_small_blocks_and_nothing_else(self):
+        fake = self.exchange()
+        with on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), mock.patch("sys.stdin.isatty", return_value=True), \
+                mock.patch("builtins.input", return_value=sn.CONFIRM_PHRASE), mock.patch("builtins.print") as out, \
+                mock.patch.object(d.c, "address_of", return_value=self.ADDR), mock.patch.object(d.c, "account", return_value="acct") as key, \
+                mock.patch.object(dt.c, "exchange", return_value=fake) as ex, mock.patch.object(dt.c, "record"), \
+                mock.patch.object(d.c, "transact") as sent, mock.patch("ops.deploy_testnet.time.sleep"):
+            self.assertEqual(d.main([*self.ARGV, "--send"]), 0)
+        key.assert_called_once_with("deployer")
+        ex.assert_called_once_with("acct")
+        fake.use_big_blocks.assert_called_once_with(False)
+        sent.assert_not_called()
+        self.assertIn("is on small blocks", "\n".join(str(x.args[0]) for x in out.call_args_list))
+
+    def test_a_refusal_by_the_exchange_stops_with_its_answer(self):
+        fake = self.exchange({"status": "err", "response": "nope"})
+        with on(networks.TESTNET), mock.patch.object(d.c, "address_of", return_value=self.ADDR), mock.patch.object(d.c, "account"), \
+                mock.patch.object(dt.c, "exchange", return_value=fake), mock.patch.object(dt.c, "record"), mock.patch("builtins.print"), \
+                mock.patch("ops.deploy_testnet.time.sleep"):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["big-blocks-off", "--send"])
+        self.assertIn("could not switch big blocks to False", str(caught.exception))
+
+    def test_it_is_the_call_deploy_makes_in_its_finally(self):
+        import inspect
+        self.assertIs(d.big_blocks, dt.big_blocks)
+        self.assertIn("big_blocks(op, False)", inspect.getsource(d.deploy))
 
 
 if __name__ == "__main__":
