@@ -2925,7 +2925,9 @@ class TheFirstLookAndTheSide(Base):
                 raise sf.Unsure("eth_getBlockByNumber: HTTP 500")
             return real(method, params)
 
-        looks, now = {"n": 0}, [10_000.0]
+        # The clock the loop's numbering was measured by (`Base.loop`), not a fixed one: far ahead of it, the numbering
+        # would be due again at once, and its measure asks for a block by its number too.
+        looks, now = {"n": 0}, [loop.ahead_at]
 
         def served(until, stop):
             looks["n"] += 1
