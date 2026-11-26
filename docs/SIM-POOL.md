@@ -723,7 +723,10 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   and any look once a minute, is held against the node's own record of its block; one that does not hold makes no
   step by its number: the numbering is measured again at once and that look is the head and a call a price (a
   measure that fails is tried again ten seconds on, not at every look, and the looks between are made that way;
-  the first look after a start is held against the node's record too). A price
+  the first look after a start is held against the node's record too). A check the node does not answer (busy, a
+  server's error, not reached) holds nothing and finds nothing wrong: that look and the ones due till it is asked
+  again ten seconds on are the head and a call a price, and the loop steps on. A look counts as blocks skipped only
+  when it comes more than one block past the last look, not past the last block stepped. A price
   read in the call after one that failed (and may have burned its gas) is asked again alone. If the call fails
   whole, that one look is the head and then a call a price, as before; without Multicall3 on the chain every look
   is (and on mainnet the loop does not start);
@@ -733,10 +736,16 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   to the keeper's fast loop, which asks the node for no head and no logs of its own. The read goes in the width the
   node takes: at most the widest read (`--stop-log-window`, 50 blocks by default), and a node that takes fewer
   (Alchemy's free plan takes 10) says so by refusing, the window is narrowed, down to one block, and the width it
-  took is kept (tried again at the widest read an hour on). It goes as far as the node's logs reach: a node whose logs
+  took is kept (tried again at the widest read an hour on). Only a refusal whose words speak of the range of blocks
+  narrows it, and only one of the full width kept, or one naming a narrower width, teaches it; any other error (a
+  server's, a timeout, a busy node, an HTTP 408 or 429) ends the step as it comes, and the windows read before it are
+  kept, the step going as far as they reach. No word of the node's own goes into an error, a line or an alarm, only the
+  width it names. It goes as far as the node's logs reach: a node whose logs
   stand a block or two behind its head is read to there and the rest at the next step, which is no failure; within the
   1 000 blocks of the catch-up no block is skipped (past them the loop says it lost the thread, below), and the prices
-  a look read of a block the steps had not reached yet are its line when they do;
+  a look read of a block the steps had not reached yet are its line when they do. A stop reached at the head is sent
+  on the head's prices before that block's events are read: one the trader took off in that very block is refused by
+  the exam and costs its gas, and is never carried out twice;
 - a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
   for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
   the next time (a book past the ceiling, say);
@@ -780,10 +789,11 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   hour at most, the episodes between said as lines) and 30 blocks without prices while a stop stands. An alarm's own
   reads (whether the exam was over) are made after the step's stops went out. An alarm of the loop's health that
   its cause raises again at each step (`stop_watch_lost`, `stop_watch_gap`, `stop_watch_blind_long`,
-  `stop_numbering_changed`, `stop_loop_dead`) is raised once in ten minutes at most, the next one saying how many
-  were not; a stop's own alarms are each raised. The keeper's fast loop takes its blocks from this loop alone, and
-  says so when none came for 30 seconds (`keeper_unfed`): no order placed meanwhile is sent a fill (one sent before
-  may still land). A line `stop_loop_alive`
+  `stop_numbering_changed`, `stop_loop_dead`) is raised once in ten minutes at most, each one between a line of its
+  own (`held_back`), the next alarm saying how many were not; a stop's own alarms are each raised. The keeper's fast
+  loop takes its blocks from this loop alone, and says so when none came for 30 seconds (`keeper_unfed`), or when
+  they came and its own step failed on each for as long (`keeper_stuck`): no order placed meanwhile is sent a fill
+  (one sent before may still land). A line `stop_loop_alive`
   every minute says it works, with the requests it asked of its node since the last, by method, the width of
   `eth_getLogs` the node takes and the steps its logs ended short of the head in (`keeper_alive` is the keeper's own).
 

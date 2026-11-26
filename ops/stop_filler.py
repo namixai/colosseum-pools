@@ -89,10 +89,11 @@ the loop's own look read (`stop_read_back_off`: reading back is off for the run)
 and changed (`stop_numbering_changed`), and a look that did not hold with the numbering measured as before
 (`stop_look_wrong`, once an hour at most). An alarm of the loop's health that its cause raises at every step (a lost
 thread, a gap, a long blindness, a numbering that flips, a thread that keeps ending) is raised once in
-`ALARM_AGAIN_S` at most, the next one saying how many were not (`_alarm_again`); a stop's own alarms are each raised.
-No key and no node address goes to a line or an alarm (`scrub`). Once a minute the loop says it is alive, with the
-requests it made of its node since, by method, the width of eth_getLogs the node takes and the steps its logs ended
-short of the head in (`stop_loop_alive`).
+`ALARM_AGAIN_S` at most, each one between a line of its own, and the next alarm saying how many were not
+(`_alarm_again`); a stop's own alarms are each raised. No key and no node address goes to a line or an alarm
+(`scrub`), and no word of a node's answer of HTTP 4xx but the width it names (`Node._said`). Once a minute the loop
+says it is alive, with the requests it made of its node since, by method, the width of eth_getLogs the node takes and
+the steps its logs ended short of the head in (`stop_loop_alive`).
 
 What this does not do: carry out a stop whose reach is shorter than the way from a block seen to a transaction landed
 (about one or two blocks); carry out a stop the exam refuses (its book too far from the oracle); stop a trader taking a
@@ -181,7 +182,8 @@ NUMBERING_EVERY_S = sk.NUMBERING_EVERY_S
 # this many seconds, and every look between is made the old way (review 20 of #342, L3). Measured at every look, a
 # node whose servers stand at different heights fails the measure again and again, up to 24 requests a look: with
 # a step stuck behind, every look doubted and held against the node's record, it went from about 191 requests a
-# minute to 577, then 1 141, on testnet on 25 November 2026.
+# minute to 577, then 1 141, on testnet on 25 November 2026. So is the check of a look the node did not answer (a busy
+# node, a server's error): the looks between are made the old way (review of #349, M2).
 NUMBERING_RETRY_S = 10.0
 # Blocks whose line of the journal carries no price at all (or that have no line: not read back) are an alarm once
 # they are more than UNPRICED_SHARE of the blocks of the last UNPRICED_WINDOW_S, with or without a stop standing: a
@@ -315,8 +317,8 @@ class Node:
         if resp.status_code >= 500:
             raise Unsure(f"{method}: HTTP {resp.status_code}")
         if resp.status_code >= 400:
-            # The node's own words, when it gave any: a refusal of an eth_getLogs's width names the width it takes
-            # (Alchemy's free plan answers HTTP 400 with "up to a 10 block range"). Never the address.
+            # What a refusal of an eth_getLogs's width says of the width, in this module's words (Alchemy's free plan
+            # answers HTTP 400 with "up to a 10 block range"); no other word of the node's (`_said`).
             raise RuntimeError(f"{method}: HTTP {resp.status_code}{self._said(resp)}")
         try:
             body = resp.json()
@@ -331,16 +333,18 @@ class Node:
 
     @staticmethod
     def _said(resp) -> str:
-        """The error an answer of HTTP 4xx carries, as ": <message>" cut to 200, every address in it taken out whole
-        (a provider's key may be its host name, which `scrub` keeps); "" when it carries none that parses."""
-        try:
-            error = resp.json().get("error")
-        except Exception:
+        """Of the error an answer of HTTP 4xx carries, only what an eth_getLogs's refusal says of the range, in this
+        module's words: ": a block range refused, N blocks at most" (N when the node names it), or ": a block range past
+        the node's head"; "" for any other. The node's own words go nowhere (review of #349, L4): an error goes to
+        lines, to the flag file and to the alarm's channel, and a provider may echo its key in a 401 or a 403, or name
+        the host of a --stop-rpc whose host name is the key, which `scrub` and the log's hush do not know."""
+        text = sk.error_message(resp)
+        if sk.beyond_head(text):
+            return ": a block range past the node's head"
+        if not sk.speaks_of_width(text):
             return ""
-        text = error.get("message") if isinstance(error, dict) else error
-        if not text:
-            return ""
-        return f": {scrub(re.sub(r'[a-z][a-z0-9+.-]*://[^\s<>]+', '<url>', str(text), flags=re.IGNORECASE))[:200]}"
+        n = sk.said_width(text)
+        return ": a block range refused" + (f", {n} blocks at most" if n else "")
 
 
 # ── the key's one sender ─────────────────────────────────────────────────────────────
@@ -809,6 +813,7 @@ class StopLoop:
         self.landed: dict[tuple[str, int, bool], int] = {}  # a stop whose fill landed past the last step -> its block
         self.again: dict[str, tuple[float, int]] = {}  # an alarm -> when it was last raised, and the ones not raised since
         self.measure_failed_at: float | None = None  # the last measure of the numbering that took nothing
+        self.check_failed_at: float | None = None  # the last check of a look the node did not answer (`_checked`)
         # With Multicall3 on the chain (`build` looks at the start): one eth_call a look carries the block's number,
         # its time and every price (`_look`). Without it, the loop as it was: the head, then a call a price.
         self.multicall = multicall
@@ -1220,9 +1225,11 @@ class StopLoop:
         were read to. A node whose logs end before `hi` (its servers a block or two behind the one that answered the
         head: "block range extends beyond current head block") is read to the block before, and that is no failure:
         the step goes as far as the logs, and the next one reads the rest. No block is skipped: a block whose events
-        were not read is a stop's reach unseen. A busy node, or one never reached, ends the step as before."""
+        were not read is a stop's reach unseen. Any other error ends the step as before (a busy node, one never
+        reached, a timeout, a server's error: never narrowed), the windows read before it kept: the step goes as far
+        as they reach, and the next one meets the error again if it lasts."""
         return self.logs.read(self.node.call, {"address": addresses, "topics": [topics]}, lo, hi,
-                              passes=(c.NodeBusy, Unreached), unsure=(Unsure,))
+                              passes=(c.NodeBusy, Unreached, Unsure))
 
     def _logs(self, accounts: list[str], pools: list[str], lo: int, hi: int) -> tuple[dict[int, list[dict]], int]:
         """The events of blocks `lo` to `hi` by block, and the last block they were read to (`_get_logs`)."""
@@ -1809,12 +1816,16 @@ class StopLoop:
 
     def _alarm_again(self, event: str, **fields) -> None:
         """An alarm of the loop's health that its cause may raise at every step (`ALARM_AGAIN_S`): raised, unless one of
-        the same name was within ALARM_AGAIN_S; then counted, and the next one raised says how many were not
-        (`not_raised`) and since when. Never for a stop's own alarms: each miss is raised."""
+        the same name was within ALARM_AGAIN_S; then it is a line of its own, with all it says, and no alarm (review of
+        #349, L1: a second gap of other blocks minutes later is seen, and so are the ones held back when the cause
+        passes before the next alarm), and the next one raised says how many were not (`not_raised`) and since when.
+        Never for a stop's own alarms: each miss is raised."""
         now = time.monotonic()
         at, unraised = self.again.get(event, (None, 0))
         if at is not None and now - at < ALARM_AGAIN_S:
             self.again[event] = (at, unraised + 1)
+            log(event, **fields, held_back=f"raised {int(now - at)} s ago: a line now, an alarm again at most once in "
+                                           f"{int(ALARM_AGAIN_S)} s")
             return
         self.again[event] = (now, 0)
         if unraised:
@@ -1994,6 +2005,9 @@ class StopLoop:
             # The call's number cannot be counted back yet: the loop does not stand still for it, nor the keeper's
             # fast loop behind it. A block missed meanwhile is a gap (`_read_back`).
             look = self._look_one_by_one()
+        elif time.monotonic() - self.confirmed_at >= CONFIRM_EVERY_S and self._check_waits(time.monotonic()):
+            # A look due to be held while the node does not answer the check: the old way at once, no call wasted.
+            look = self._look_one_by_one()
         else:
             try:
                 look = self._checked(self._look())
@@ -2017,8 +2031,11 @@ class StopLoop:
             return f"block {look.block} was looked at with the time {seen}, this call says {look.t}"
         if self.last_look is not None and look.block != self.last_look[0] and look.t == self.last_look[1]:
             return f"block {look.block} says the time of block {self.last_look[0]}"
-        if self.block and look.block > self.block + 1:
-            return f"block {look.block} after {self.block}: blocks between would be skipped"
+        # Past the block of the last look, not past the last block stepped: a step the node's logs ended short of the
+        # head in leaves the loop's block behind its looks, and the next look is no skip (review of #349, M3).
+        seen = max(self.block, self.last_look[0] if self.last_look is not None else 0)
+        if seen and look.block > seen + 1:
+            return f"block {look.block} after {seen}: blocks between would be skipped"
         return None
 
     def _checked(self, look: Look) -> Look:
@@ -2027,18 +2044,31 @@ class StopLoop:
         the look's number, whose time must be the call's. One that does not hold makes no step by its number: the
         numbering is measured again at once (a change is an alarm), every look is made the old way till it is, and
         so is this one, the head as the node says it. Measured as before with the node recording that number under
-        another time, it is an alarm too, at most once in LOOK_WRONG_REALARM_S."""
+        another time, it is an alarm too, at most once in LOOK_WRONG_REALARM_S. A check the node does not answer (busy,
+        a server's error, not reached) holds nothing and finds nothing wrong: that look is made the old way, and so is
+        every one due till the check is asked again NUMBERING_RETRY_S on (`_check_waits`)."""
         why = self._doubted(look)
         now = time.monotonic()
         if why is None and now - self.confirmed_at < CONFIRM_EVERY_S:
             self._keep(look)
             return look
+        if self._check_waits(now):
+            return self._look_one_by_one()  # doubted while the node does not answer the check: not asked again yet
         try:
             recorded = sk.block_time(self.node.call, look.block)
-        except (c.NodeBusy, Unsure, Unreached):
-            raise  # not held: the check stays due, and the next look is held (review of #349)
+        except (c.NodeBusy, Unsure, Unreached) as exc:
+            # Neither held nor found wrong: this look makes no step by its number, and is made the old way, the head as
+            # the node says it; the check stays due and is asked again in NUMBERING_RETRY_S, the looks till then made
+            # the same way (`_check_waits`). Raised, a node that did not answer a block by its number stood the loop
+            # still for as long, not one step in 400 blocks (review of #349, M2).
+            self.check_failed_at = now
+            self._say("stop_look_unchecked", block=look.block, error=scrub(str(exc))[:200],
+                      then=f"this look the old way, and every one till it is held, asked again in "
+                           f"{int(NUMBERING_RETRY_S)} s")
+            return self._look_one_by_one()
         except Exception:
             recorded = None
+        self.check_failed_at = None
         self.confirmed_at = now
         if recorded == look.t:
             self._keep(look)
@@ -2067,6 +2097,11 @@ class StopLoop:
                        note="the numbering measured again is the same: the node's calls and its own record of a block "
                             "disagree (one address, several servers?)")
         return self._look_one_by_one()
+
+    def _check_waits(self, now: float) -> bool:
+        """Whether the node did not answer the check of a look by its number (`_checked`) less than NUMBERING_RETRY_S
+        ago: the looks till then are made the old way, and no block is asked for by its number."""
+        return self.check_failed_at is not None and now - self.check_failed_at < NUMBERING_RETRY_S
 
     def _keep(self, look: Look) -> None:
         """A look at the head that held: its prices, for the check of the node's answers by number (`_read_back_holds`),

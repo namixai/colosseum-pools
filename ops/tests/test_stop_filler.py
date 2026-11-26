@@ -2498,8 +2498,8 @@ class TheStart(Base):
 class LimitedNode(Node):
     """A node of narrower ways than HyperEVM's own, as Alchemy's free plan was on testnet on 25 November 2026: its
     eth_getLogs takes at most `limit` blocks and refuses a wider range with HTTP 400, naming the width it takes or not
-    (`named`); and its logs may stand `lag` blocks behind the head its calls answer at, a range past them refused with
-    -32602."""
+    (`named`), as the loop's node says such an answer (`sf.Node._said`); and its logs may stand `lag` blocks behind the
+    head its calls answer at, a range past them refused with -32602."""
 
     def __init__(self, limit: int = 10, lag: int = 0, named: bool = True):
         super().__init__()
@@ -2513,10 +2513,12 @@ class LimitedNode(Node):
                 self.refused(method, params, lo, hi, "past its head",
                              "eth_getLogs: {'code': -32602, 'message': 'block range extends beyond current head block'}")
             if hi - lo + 1 > self.limit:
-                said = (f": Under the Free tier plan, you can make eth_getLogs requests with up to a {self.limit} block "
-                        f"range. Based on your parameters, this block range should work: [{hex(lo)}, "
-                        f"{hex(lo + self.limit - 1)}]") if self.named else ""
-                self.refused(method, params, lo, hi, "too wide", f"eth_getLogs: HTTP 400{said}")
+                answer = mock.Mock(status_code=400)
+                answer.json.return_value = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": (
+                    f"Under the Free tier plan, you can make eth_getLogs requests with up to a {self.limit} block range. "
+                    f"Based on your parameters, this block range should work: [{hex(lo)}, {hex(lo + self.limit - 1)}]"
+                    if self.named else "block range too large")}}
+                self.refused(method, params, lo, hi, "too wide", f"eth_getLogs: HTTP 400{sf.Node._said(answer)}")
             self.log_reads.append((lo, hi, "read"))
         return super().call(method, params)
 
@@ -2699,18 +2701,102 @@ class TheNodesLimits(Base):
         self.assertFalse({101, 102, 103} & set(loop.head_t), "nor their time, which a line read again would keep")
         self.assertEqual(loop.head_t[100], self.node.time_of(100), "a block stepped keeps its line's time")
 
-    def test_a_refusal_of_http_400_carries_the_nodes_words_and_no_address(self):
-        node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
+    def test_a_node_failing_its_logs_is_asked_once_a_step_not_in_ever_narrower_windows(self):
+        """A server's -32603, an HTTP 5xx, a timeout: each narrowed down to one block, 606 eth_getLogs a minute against
+        120 before, and a step of timeouts waited half a minute (review of #349, M1). Raised as it comes, as before."""
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        real = self.node.call
+        for error in (RuntimeError("eth_getLogs: {'code': -32603, 'message': 'internal error'}"),
+                      sf.Unsure("eth_getLogs: HTTP 503"), sf.Unsure("eth_getLogs: ReadTimeout")):
+            with self.subTest(error=str(error)):
+                def call(method, params=(), error=error):
+                    if method == "eth_getLogs":
+                        self.node.calls.append((method, params))
+                        raise error
+                    return real(method, params)
+
+                before = len(self.node.calls)
+                with mock.patch.object(self.node, "call", side_effect=call), self.assertRaises(type(error)):
+                    self.run_to(loop, 140)
+                self.assertEqual(sum(1 for m, _ in self.node.calls[before:] if m == "eth_getLogs"), 1)
+                self.assertEqual((loop.block, loop.logs.width), (100, sf.LOG_WINDOW))
+        self.assertEqual(self.events("logs_window_narrowed"), [])
+
+    def test_the_windows_read_before_a_block_the_node_fails_on_are_kept_and_the_step_goes_as_far(self):
+        """Ten blocks a window, 30 behind, and the node fails on block 125: blocks 101 to 120 read, the step to 120, and
+        the next one meets the error at block 121 (review of #349, M1: the blocks before it were read and dropped)."""
+        self.node = LimitedNode(limit=10)
+        loop = self.loop(wallet=None)
+        loop.logs.width = 10
+        self.run_to(loop, 100)
+        real = self.node.call
+
+        def call(method, params=()):
+            if method == "eth_getLogs" and int(params[0]["fromBlock"], 16) <= 125 <= int(params[0]["toBlock"], 16):
+                self.node.calls.append((method, params))
+                raise RuntimeError("eth_getLogs: {'code': -32603, 'message': 'internal error'}")
+            return real(method, params)
+
+        with mock.patch.object(self.node, "call", side_effect=call):
+            self.run_to(loop, 130)
+            self.assertEqual(loop.block, 120)
+            with self.assertRaises(RuntimeError):
+                self.run_to(loop, 131)
+        self.assertEqual(loop.block, 120)
+        self.assertEqual(self.node.blocks_read(), list(range(100, 121)), "each block once")
+        self.assertEqual([e["read_to"] for e in self.events("logs_read_stopped")], [120])
+        self.run_to(loop, 132)
+        self.assertEqual(loop.block, 132)
+        self.assertEqual(self.node.blocks_read(), list(range(100, 133)))
+
+    def test_after_a_step_the_nodes_logs_ended_short_in_the_next_look_is_no_skip(self):
+        """The node's logs a block behind its head: each step one block short of its look. The next look, one block on
+        from the last, was taken for blocks skipped and held against the node's record, and when that answer failed,
+        the prices kept were dropped and the journal had gaps (review of #349, M3). Blocks past the last look are."""
+        if not self.MULTICALL:
+            return
+        self.node = LimitedNode(limit=50)
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.lag = 1
+        before = len(self.node.calls)
+        self.run_to(loop, 101, 102, 103)
+        self.assertEqual(loop.block, 102)
+        self.assertEqual([p for m, p in self.node.calls[before:] if m == "eth_getBlockByNumber"], [], "none doubted")
+        self.node.lag = 0
+        self.run_to(loop, 105)
+        self.assertEqual([p for m, p in self.node.calls[before:] if m == "eth_getBlockByNumber"], [[hex(105), False]],
+                         "two blocks past the last look: held")
+        self.assertEqual(self.events("stop_look_unconfirmed"), [])
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual((sorted(journal.px[BTC]), journal.gaps), (list(range(100, 106)), []))
+
+    def test_a_refusal_of_http_4xx_says_the_width_it_names_and_no_other_word_of_the_nodes(self):
+        """The node's words went into the error, and from there to lines, the flag file and the alarm's channel: a
+        provider's key echoed in a 401, or the host name of a --stop-rpc whose host is the key, with them (review of
+        #349, L4). Only what a refusal of the range says of it is said, in the loop's own words."""
+        node = sf.Node("http://SECRETHOST.example.invalid:9/v2/SECRETKEY")
         answer = mock.Mock(status_code=400)
-        answer.json.return_value = {"jsonrpc": "2.0", "id": 1, "error": {
-            "code": -32600, "message": "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block "
-                                       "range. See http://127.0.0.1:9/v2/SECRETKEY/docs and https://SECRETKEY.example.invalid/x"}}
-        with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
-            node.call("eth_getLogs", [{}])
-        said = str(caught.exception)
-        self.assertTrue(said.startswith("eth_getLogs: HTTP 400: Under the Free tier plan"), said)
-        self.assertNotIn("secretkey", said.lower(), "neither in a path nor as a host name")
-        self.assertEqual(sk.named_width(said, 50), 10)
+
+        def said(status: int, message) -> str:
+            answer.status_code = status
+            answer.json.return_value = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": message}}
+            with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
+                node.call("eth_getLogs", [{}])
+            return str(caught.exception)
+
+        width = said(400, "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. See "
+                          "http://SECRETHOST.example.invalid:9/v2/SECRETKEY/docs, SECRETHOST, SECRETKEY")
+        self.assertEqual(width, "eth_getLogs: HTTP 400: a block range refused, 10 blocks at most")
+        self.assertEqual((sk.said_width(width), sk.width_refusal(RuntimeError(width), 50)), (10, (10, True)))
+        self.assertEqual(said(400, "block range too large SECRETKEY"), "eth_getLogs: HTTP 400: a block range refused")
+        behind = said(400, "block range extends beyond current head block")
+        self.assertEqual(behind, "eth_getLogs: HTTP 400: a block range past the node's head")
+        self.assertTrue(sk.beyond_head(behind))
+        for status, message in ((401, "Invalid API key SECRETKEY for SECRETHOST.example.invalid"),
+                                (403, "SECRETKEY: not allowed"), (408, "request limit"), (400, "limit SECRETHOST")):
+            self.assertEqual(said(status, message), f"eth_getLogs: HTTP {status}", "no word of the node's")
         answer.json.side_effect = ValueError("not JSON")
         with mock.patch.object(node.session, "post", return_value=answer), self.assertRaises(RuntimeError) as caught:
             node.call("eth_getLogs", [{}])
@@ -2741,7 +2827,10 @@ class TheAlarmsThatComeAgain(Base):
                 with self.assertRaises(RuntimeError):
                     self.run_to(loop, h)
         lost = self.events("stop_watch_lost")
-        self.assertEqual([a["alarm"] for a in lost], ["ALARM"], "one alarm for thirty steps")
+        self.assertEqual([a.get("alarm") for a in lost if "held_back" not in a], ["ALARM"], "one alarm for thirty steps")
+        held = [a for a in lost if "held_back" in a]
+        self.assertEqual(len(held), 29, "each one held back is a line of its own (review of #349, L1)")
+        self.assertTrue(all("alarm" not in a and a["from_block"] > 100 for a in held), "a line, not an alarm, saying all")
         flagged = [l for l in (self.dir / "stops.alarm").read_text().splitlines() if "stop_watch_lost" in l]
         self.assertEqual(len(flagged), 1)
         at, unraised = loop.again["stop_watch_lost"]
@@ -2749,8 +2838,8 @@ class TheAlarmsThatComeAgain(Base):
         loop.again["stop_watch_lost"] = (at - sf.ALARM_AGAIN_S, unraised)
         with self.failing_logs(), self.assertRaises(RuntimeError):
             self.run_to(loop, 180)
-        lost = self.events("stop_watch_lost")
-        self.assertEqual((len(lost), lost[1]["not_raised"]), (2, 29), "the next one says how many were not raised")
+        raised = [a for a in self.events("stop_watch_lost") if a.get("alarm")]
+        self.assertEqual((len(raised), raised[1]["not_raised"]), (2, 29), "the next one says how many were not raised")
         self.assertEqual(loop.logs.width, sf.LOG_WINDOW, "an error that says nothing of the width teaches none")
 
     def test_a_stops_own_alarms_are_each_raised_however_close_together(self):
@@ -2769,7 +2858,8 @@ class TheAlarmsThatComeAgain(Base):
             for _ in range(5):
                 sf.keep_alive(loop, dead, 0.5)
         self.assertEqual(again.call_count, 5)
-        self.assertEqual(len(self.events("stop_loop_dead")), 1)
+        dead = self.events("stop_loop_dead")
+        self.assertEqual(([a.get("alarm") for a in dead], sum("held_back" in a for a in dead)), (["ALARM"] + [None] * 4, 4))
 
 
 class TheFirstLookAndTheSide(Base):
@@ -2781,19 +2871,78 @@ class TheFirstLookAndTheSide(Base):
         asked = [p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"]
         self.assertEqual(asked, [hex(100)] if self.MULTICALL else [])
 
-    def test_a_busy_node_at_the_first_looks_check_leaves_the_check_due(self):
-        """The first look's check met a busy node: the look fails, and the next one is held instead, not a minute later
-        (review of #349)."""
+    def test_a_check_the_node_does_not_answer_makes_that_look_the_old_way_and_is_asked_again_a_moment_later(self):
+        """The first look's check met a node that did not answer (busy, a server's error, not reached): raised, the
+        check stayed due and every look after failed the same way, not one step in 400 blocks on a node that did not
+        answer a block by its number (review of #349, M2). That look is made the old way, so is every one till the
+        check is asked again NUMBERING_RETRY_S on, and the first that holds ends it; no block is lost."""
+        if not self.MULTICALL:
+            return
+        for error in (c.NodeBusy("eth_getBlockByNumber: HTTP 429"), sf.Unsure("eth_getBlockByNumber: HTTP 500"),
+                      sf.Unreached("eth_getBlockByNumber: ConnectTimeout")):
+            with self.subTest(error=type(error).__name__):
+                for f in self.dir.glob("prices*"):
+                    f.unlink()
+                self.journal = None
+                self.node = Node()
+                loop = self.loop(wallet=None)
+                real = self.node.call
+
+                def call(method, params=(), real=real, error=error):
+                    if method == "eth_getBlockByNumber" and params[0] != "latest":
+                        self.node.calls.append((method, params))
+                        raise error
+                    return real(method, params)
+
+                with mock.patch.object(self.node, "call", side_effect=call):
+                    self.run_to(loop, 100, 101, 102)
+                self.assertEqual(loop.block, 102, "each look stepped")
+                by_number = [p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber" and p[0] != "latest"]
+                self.assertEqual(by_number, [hex(100)], f"asked once, then not for {sf.NUMBERING_RETRY_S:g} seconds")
+                self.assertEqual(sum(1 for m, p in self.node.calls if m == "eth_getBlockByNumber" and p[0] == "latest"), 3,
+                                 "each look the old way")
+                self.assertEqual(len(self.node.batches()), 1, "no one call wasted on a look made the old way")
+                loop.check_failed_at -= sf.NUMBERING_RETRY_S
+                before = len(self.node.calls)
+                self.run_to(loop, 103, 104)
+                self.assertEqual([p for m, p in self.node.calls[before:] if m == "eth_getBlockByNumber"],
+                                 [[hex(103), False]], "asked again, held, and not again within the minute")
+                self.assertIsNone(loop.check_failed_at)
+                journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+                self.assertEqual((sorted(journal.px[BTC]), journal.gaps), (list(range(100, 105)), []))
+
+    def test_a_node_that_never_answers_a_block_by_its_number_stands_no_step_still(self):
+        """Through the loop's own run: two looks a block for two minutes, every eth_getBlockByNumber of a number an HTTP
+        500. Every block stepped, the number asked for once in NUMBERING_RETRY_S (review of #349, M2: 0 of 400)."""
         if not self.MULTICALL:
             return
         loop = self.loop(wallet=None)
-        self.node.busy = {"eth_getBlockByNumber"}
-        with self.assertRaises(c.NodeBusy):
-            self.run_to(loop, 100)
-        self.node.busy = set()
-        before = len(self.node.calls)
-        self.run_to(loop, 101)
-        self.assertIn(("eth_getBlockByNumber", [hex(101), False]), self.node.calls[before:])
+        real = self.node.call
+
+        def call(method, params=()):
+            if method == "eth_getBlockByNumber" and params[0] != "latest":
+                self.node.calls.append((method, params))
+                raise sf.Unsure("eth_getBlockByNumber: HTTP 500")
+            return real(method, params)
+
+        looks, now = {"n": 0}, [10_000.0]
+
+        def served(until, stop):
+            looks["n"] += 1
+            now[0] += 0.5
+            if looks["n"] % 2 == 0:
+                self.node.head += 1
+            if looks["n"] >= 240:
+                stop.set()
+
+        loop._served = served
+        with mock.patch.object(self.node, "call", side_effect=call), \
+                mock.patch.object(sf.time, "monotonic", side_effect=lambda: now[0]):
+            loop.run(0.5, threading.Event())
+        self.assertEqual((loop.block, self.node.head), (219, 220))
+        by_number = sum(1 for m, p in self.node.calls if m == "eth_getBlockByNumber" and p[0] != "latest")
+        self.assertLessEqual(by_number, 120 / sf.NUMBERING_RETRY_S + 1)
+        self.assertEqual([e for e, f in self.said if f.get("alarm") or e in ("stop_loop_failed", "stop_node_busy")], [])
 
     def test_a_wrong_measure_at_the_start_loses_no_event(self):
         """L1: measured 0 where the node numbers a call as the next block (a measure that met the coincidences it asks
