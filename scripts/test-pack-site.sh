@@ -104,7 +104,12 @@ GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$simbl
   --cacheinfo "100644,$simrec,deployments/mainnet-sim-net.json" --cacheinfo "100644,$termsblob,app/data/terms-mainnet.md"
 simc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/simindex" git write-tree)" -p HEAD -m "a mainnet simulation-pool deployment")"
 line4="$(./scripts/pack-site.sh --network mainnet "$simc" "$TMP/sim" 2>&1 | tail -1)" || { echo "FAIL mainnet pack: refused: $line4"; exit 1; }
-want4="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$simc\",\"network\":\"mainnet\"} "
+# A mainnet pack holds the commit's app/ without what the site does not load: its tests, testnet's og picture, the data
+# only testnet's pages fetch and the libraries nothing imports (scripts/pack-site.sh, MAINNET_LEAVES_OUT).
+LEFT_OUT="app/brand/og-image-1200x630.png app/data/abi-v3-demo3.json app/data/safety.json app/data/calc_tables.json app/data/evidence.json app/lib/agentterm.js app/lib/contacts.js app/lib/safety.js"
+git ls-tree -r --name-only "$simc" -- app/ | grep -v '^app/tests/' | grep -vxF "$(printf '%s\n' $LEFT_OUT)" | sed 's|^app/|./|' | LC_ALL=C sort > "$TMP/want-main.list"
+m="$(wc -l < "$TMP/want-main.list" | tr -d ' ')"
+want4="files=$m match=$m differ=0 extra=0 build={\"commit\":\"$simc\",\"network\":\"mainnet\"} "
 case "$line4" in "$want4"*) ;; *) echo "FAIL mainnet pack: the packer said: $line4"; exit 1 ;; esac
 python3 scripts/app_config.py --network mainnet --commit "$simc" > "$TMP/sim-config.js"
 python3 scripts/app_config.py --network mainnet --index --commit "$simc" > "$TMP/sim-index.html"
@@ -124,6 +129,46 @@ grep -q '<a href="#/terms">Terms of Use</a>' "$TMP/sim/index.html" && cmp -s "$T
   && [ -f "$TMP/sim/brand/og-mainnet-1200x630.png" ] \
   || { echo "FAIL mainnet pack: its Terms of Use or its picture are not in it, or not named by its page"; exit 1; }
 (cd "$TMP/sim" && "${SUM[@]}" -c --status "$TMP/sim.sha256") || { echo "FAIL mainnet pack: the list does not check the pack"; exit 1; }
+(cd "$TMP/sim" && find . -type f ! -name build.json | LC_ALL=C sort) | cmp -s - "$TMP/want-main.list" \
+  || { echo "FAIL mainnet pack: its files are not the commit's app/ without its tests and what the site does not load"; exit 1; }
+[ -z "$(find "$TMP/sim" -path '*/tests*')" ] || { echo "FAIL mainnet pack: it carries app/tests"; exit 1; }
+for f in $LEFT_OUT; do [ ! -e "$TMP/sim/${f#app/}" ] || { echo "FAIL mainnet pack: it carries ${f#app/}, which the site does not load"; exit 1; }; done
+# Everything the site loads is in it: from index.html, every module imported and every file named by a fetch, a link, a
+# script, an image or a stylesheet's url() is a file of the pack.
+python3 - "$TMP/sim" <<'PY' || { echo "FAIL mainnet pack: something its page loads is not in it"; exit 1; }
+import os, re, sys
+root = sys.argv[1]
+# A module's own folder for what it imports and for new URL(.., import.meta.url); the page's root for fetch() and for
+# index.html's and the stylesheets' own paths (a stylesheet's url() is from the stylesheet, and both lie in the root).
+mod = re.compile(r"""(?:\bfrom\s*|\bimport\s*\(?\s*|new URL\(\s*)["'](\.{1,2}/[^"']+)["']""")
+fet = re.compile(r"""fetch\(\s*["'](\.?/?[\w./-]+)["']""")
+att = re.compile(r"""(?:src|href)=["']([^"':#?]+)["']""")
+css = re.compile(r"""url\(\s*["']?([^"')]+)["']?\)""")
+# The data the pools' own pages fetch (the new-pool form's price floor, the economics page and the records): those
+# pages are not routes of a mainnet site, so the files are left out (LEFT_OUT) and the fetches are not followed.
+todo, seen, bad = ["index.html"], set(), []
+while todo:
+    f = todo.pop()
+    if f in seen: continue
+    seen.add(f)
+    path = os.path.join(root, f)
+    if not os.path.isfile(path): bad.append(f); continue
+    if not f.endswith((".js", ".html", ".css")): continue
+    text = open(path, encoding="utf8").read()
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = "\n".join(l for l in text.split("\n") if not l.lstrip().startswith("//"))
+    here = os.path.dirname(f)
+    found = []
+    if f.endswith(".js"):
+        found += [os.path.normpath(os.path.join(here, r)) for r in mod.findall(text)]
+        found += [os.path.normpath(r) for r in fet.findall(text) if "calc_tables" not in r and "evidence.json" not in r]
+    else:
+        found += [os.path.normpath(os.path.join(here, r)) for r in (att.findall(text) if f.endswith(".html") else css.findall(text))
+                  if "://" not in r and not r.startswith("data:")]
+    todo += found
+if bad: print("missing:", bad); sys.exit(1)
+print("walked", len(seen), "files")
+PY
 echo "ok   packs a mainnet site of simulation pools: the one factory in config.js, mainnet's page, every other file its blob"
 # With no folder named, a mainnet pack goes to a folder that says mainnet, and testnet's keeps the name it had: the two
 # packs of one commit are not taken for each other at the upload.

@@ -69,13 +69,22 @@ if [ "$NETWORK" != testnet ]; then
     exit 1
   fi
 fi
+# What a mainnet pack leaves out, as paths of app/ (an ERE on the path): the site's tests, testnet's og picture, the data
+# only the testnet pages fetch (calc_tables, evidence: the views behind routes a mainnet site has no route to; the ABI
+# and the safety text no script reads) and the three libraries nothing imports. Left out because they are not loaded:
+# the views are not here, app.js imports every one of them, so all stay. Testnet leaves out nothing.
+MAINNET_LEAVES_OUT='^app/(tests/|brand/og-image-1200x630\.png$|data/(abi-v3-demo3|safety|calc_tables|evidence)\.json$|lib/(agentterm|contacts|safety)\.js$)'
+packed() {
+  if [ "$NETWORK" = mainnet ]; then git ls-tree -r "$SHA" -- app/ | awk -F'\t' -v re="$MAINNET_LEAVES_OUT" '$2 !~ re'
+  else git ls-tree -r "$SHA" -- app/; fi
+}
 mkdir -p "$OUT"
 n=0
 while IFS=$'\t' read -r meta path; do
   blob=$(echo "$meta" | awk '{print $3}'); rel="${path#app/}"
   mkdir -p "$OUT/$(dirname "$rel")"
   git cat-file blob "$blob" > "$OUT/$rel"; n=$((n+1))
-done < <(git ls-tree -r "$SHA" -- app/)
+done < <(packed)
 [ -e "$OUT/build.json" ] && { echo "app/build.json is in the commit; it is the packer's to write"; exit 1; }
 if [ -n "$CONFIG" ]; then
   cp "$CONFIG" "$OUT/config.js"
@@ -91,7 +100,7 @@ while IFS=$'\t' read -r meta path; do
   elif [ -n "$INDEX" ] && [ "$rel" = index.html ]; then
     if cmp -s "$INDEX" "$OUT/$rel"; then ok=$((ok+1)); else bad=$((bad+1)); echo "DIFF $rel"; fi
   elif cmp -s <(git cat-file blob "$blob") "$OUT/$rel" && [ "$(git hash-object --no-filters "$OUT/$rel")" = "$blob" ]; then ok=$((ok+1)); else bad=$((bad+1)); echo "DIFF $rel"; fi
-done < <(git ls-tree -r "$SHA" -- app/)
+done < <(packed)
 extra=$(( $(find "$OUT" -type f | wc -l) - n - 1 ))
 line="files=$n match=$ok differ=$bad extra=$extra build=$(cat "$OUT/build.json") bytes=$(find "$OUT" -type f -exec cat {} + | wc -c | tr -d ' ') out=$OUT"
 # A pack that is not its commit gets no list: the site would be checked against the wrong files.
