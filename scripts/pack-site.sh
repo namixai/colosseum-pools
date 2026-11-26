@@ -73,7 +73,7 @@ fi
 # only the testnet pages fetch (calc_tables, evidence: the views behind routes a mainnet site has no route to; the ABI
 # and the safety text no script reads) and the three libraries nothing imports. Left out because they are not loaded:
 # the views are not here, app.js imports every one of them, so all stay. Testnet leaves out nothing.
-MAINNET_LEAVES_OUT='^app/(tests/|brand/og-image-1200x630\.png$|data/(abi-v3-demo3|safety|calc_tables|evidence)\.json$|lib/(agentterm|contacts|safety)\.js$)'
+MAINNET_LEAVES_OUT='^app/(tests/|brand/og-image-1200x630[.]png$|data/(abi-v3-demo3|safety|calc_tables|evidence)[.]json$|lib/(agentterm|contacts|safety)[.]js$)'
 packed() {
   if [ "$NETWORK" = mainnet ]; then git ls-tree -r "$SHA" -- app/ | awk -F'\t' -v re="$MAINNET_LEAVES_OUT" '$2 !~ re'
   else git ls-tree -r "$SHA" -- app/; fi
