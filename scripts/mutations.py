@@ -17946,8 +17946,8 @@ MUTATIONS = [
      "        got, top = c.rpc(\"eth_getLogs\", [{**query, \"fromBlock\": hex(lo), \"toBlock\": hex(hi)}]), hi",
      ["test_on_a_node_of_ten_blocks_the_blocks_before_the_first_step_are_read_in_its_width"]),
     ("SK449", "ops/sim_keeper.py",
-     "passes=(requests.ConnectionError, c.NodeBusy),",
-     "passes=(requests.ConnectionError,),",
+     "lo, hi, passes=(requests.ConnectionError, c.NodeBusy),",
+     "lo, hi, passes=(requests.ConnectionError,),",
      ["test_the_fast_loops_own_read_raises_a_busy_node_as_it_comes"]),
     ("SK446", "ops/sim_keeper.py",
      "        if self.unfed_said or waited < UNFED_S:",
@@ -19334,6 +19334,10 @@ MUTATIONS = [
      '        if key not in entry:',
      '        if False:',
      ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
+    ('SK451', 'ops/sim_keeper.py',
+     '            self.next_block = top + 1\n            self.save()\n            if top < hi:',
+     '            self.next_block = hi + 1\n            self.save()\n            if False:',
+     ['test_the_slow_scan_stops_where_the_nodes_logs_end_and_skips_no_block']),
 ]
 
 RUNNERS = {

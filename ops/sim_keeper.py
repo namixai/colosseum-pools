@@ -590,6 +590,8 @@ class SimKeeper:
         # The fast loop's own eth_getLogs (the blocks before the first step the stops' loop hands in, those it skipped,
         # and an account sold in them), in windows the keeper's node takes (`LogWindow`).
         self.logs = LogWindow(MAX_LOG_WINDOW)
+        # The slow pass's own (`scan`), `--log-window` at the widest.
+        self.scan_logs = LogWindow(window)
         self.fed_at: float | None = None  # when the stops' loop last handed a step in (`fed_step`)
         self.unfed_said = False
         # With Multicall3 on the chain (`main` looks at the start) the slow pass asks its reads in batches (`Reads`);
@@ -684,8 +686,11 @@ class SimKeeper:
         while self.pools and self.next_block <= end:
             hi = min(self.next_block + self.window - 1, end)
             try:
-                logs = c.rpc("eth_getLogs", [{"address": self.pools, "topics": [[EXAM_SOLD, FUNDED]],
-                                              "fromBlock": hex(self.next_block), "toBlock": hex(hi)}])
+                # In windows the node takes (`LogWindow`, `--log-window` the widest): a node of a narrower limit
+                # (Alchemy's free plan: 10 blocks) is read in smaller steps instead of stopping the pass.
+                logs, top = self.scan_logs.read(
+                    c.rpc, {"address": self.pools, "topics": [[EXAM_SOLD, FUNDED]]}, self.next_block, hi,
+                    passes=(requests.ConnectionError, c.NodeBusy), unsure=(requests.Timeout,))
             except Exception as exc:
                 log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])
                 break
@@ -693,8 +698,10 @@ class SimKeeper:
                 kind = "exam" if l["topics"][0] == EXAM_SOLD else "stage"
                 a = to_checksum_address("0x" + l["topics"][1][-40:])
                 self.accounts.setdefault(a, {"pool": to_checksum_address(l["address"]), "kind": kind})
-            self.next_block = hi + 1
+            self.next_block = top + 1
             self.save()
+            if top < hi:
+                break  # the node's logs end before `hi`: the rest is read at the next pass
 
     def account_pass(self, a: str, now: int) -> None:
         info = self.accounts[a]

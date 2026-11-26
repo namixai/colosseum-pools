@@ -1215,6 +1215,42 @@ class TheLogWindow(unittest.TestCase):
         self.assertEqual((got, top), ([], 118), "nothing past its head yet: read again next time")
 
 
+    def scan_keeper(self, limit: int, window: int = 50, max_windows: int = 20, head: int = 10**9):
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        sk = k.SimKeeper("0x" + "11" * 20, None, "0x" + "44" * 20, False, tmp / "s.json", 100, window=window,
+                         max_windows=max_windows)
+        sk.pools = [k.to_checksum_address("0x" + "22" * 20)]
+        sk.reads = mock.Mock(view=mock.Mock(return_value=[]))
+        call, asked = self.node(limit, head=head)
+        said = []
+
+        def no_events(method, params):
+            call(method, params)  # the node's limit is asked; no pool has an event in these blocks
+            return []
+
+        with mock.patch.object(k.c, "rpc", side_effect=no_events), \
+                mock.patch.object(k, "log", side_effect=lambda event, **f: said.append(event)):
+            sk.scan(1_000)
+        return sk, asked, said
+
+    def test_the_slow_scan_on_a_node_of_ten_blocks_reaches_the_head_and_never_stops(self):
+        sk, asked, said = self.scan_keeper(10)
+        self.assertEqual(sk.next_block, 1_001, "read to the head")
+        self.assertNotIn("scan_stopped", said)
+        self.assertTrue(all(hi - lo < 10 for lo, hi in asked[3:]), "narrowed once, kept")
+        self.assertLessEqual(sk.scan_logs.width, 10)
+
+    def test_the_slow_scan_stops_where_the_nodes_logs_end_and_skips_no_block(self):
+        sk, _, said = self.scan_keeper(50, head=130)
+        self.assertEqual(sk.next_block, 131, "the blocks after the node's head are read at the next pass")
+        self.assertNotIn("scan_stopped", said)
+
+    def test_the_slow_scan_on_a_node_that_takes_its_window_asks_once_a_window(self):
+        sk, asked, said = self.scan_keeper(50, window=50, max_windows=4)
+        self.assertEqual(asked, [(100, 149), (150, 199), (200, 249), (250, 299)])
+        self.assertEqual((sk.next_block, said), (300, []))
+
 class TheMeasure(unittest.TestCase):
     """--measure judges each order by the chain's events. A fill that lands between the read of the events and the
     read of `pending()` leaves no order waiting: it was written as neither filled nor lapsed."""
