@@ -28,6 +28,7 @@
     spike/.venv/bin/python -m ops.deploy_sim stop --deployment sim1 --review <pool>-<id>.json \\
         --analysis analysis.md --key checker [--old-review] [--send]                    # a stop of reason 3, by hand
     spike/.venv/bin/python -m ops.deploy_sim line --pool 0x.. --signer 0xSafe --line 8 --off           # stop selling it
+    spike/.venv/bin/python -m ops.deploy_sim big-blocks-off --network mainnet [--operator deployer] [--send] # small blocks
     spike/.venv/bin/python -m ops.deploy_sim role --deployment sim1 --signer 0xSafe --role filler \\
         --address 0x..                                                                  # replace a platform key
 
@@ -1295,6 +1296,23 @@ def fee_cmd(args) -> int:
     return 0
 
 
+def big_blocks_off_cmd(args) -> int:
+    """The way back to small blocks, on any network: the very call `deploy` makes in its `finally` (ops.deploy_testnet.
+    big_blocks(op, False)), alone. For when the deploy was killed before it ran and the deployer's wallet is left on big
+    blocks. It switches nothing on, deploys nothing and reads no plan. Without --send it says what it would do."""
+    who = args.operator
+    addr = c.address_of(who)
+    print(f"deploy_sim big-blocks-off: {c.NETWORK.name} (chain {c.CHAIN_ID}): use_big_blocks(False) for the key {who!r} "
+          f"({addr}); no transaction, the exchange's own action")
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"switch the wallet of the key {who!r} ({addr}) back to small blocks", c)
+    big_blocks(c.account(who), False)
+    print(f"deploy_sim: {addr} is on small blocks")
+    return 0
+
+
 def request(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     amount = amount_units(args.amount)
@@ -1957,6 +1975,10 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--key", help="the factory's operator")
     z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
     z.add_argument("--send", action="store_true")
+    z = sub.add_parser("big-blocks-off", help="switch the deployer's wallet back to small blocks (what deploy does in its "
+                       "finally), on testnet or mainnet; nothing else")
+    z.add_argument("--operator", default="deployer", help="the key whose wallet is switched: the one deploy ran with")
+    z.add_argument("--send", action="store_true")
     for each in sub.choices.values():
         sn.add_args(each)
     args = p.parse_args(argv)
@@ -1965,7 +1987,8 @@ def main(argv: list[str] | None = None) -> int:
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
             "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
-            "pay": pay_cmd, "stop": stop_cmd, "line": line_cmd, "role": role_cmd}[args.cmd](args)
+            "pay": pay_cmd, "stop": stop_cmd, "line": line_cmd, "role": role_cmd,
+            "big-blocks-off": big_blocks_off_cmd}[args.cmd](args)
 
 
 if __name__ == "__main__":

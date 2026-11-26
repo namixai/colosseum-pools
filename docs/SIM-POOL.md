@@ -911,7 +911,12 @@ Its terms say testnet, so mainnet refuses it; mainnet's is `deployments/plans/si
 plan with its network named (`"network": "mainnet"`: `pool` and `check` refuse a plan that names another network than
 theirs, so testnet refuses it), the opening of its terms without testnet's words, saying trading exams where
 testnet's says a simulated pool and paper exams (the site shows the terms, and says neither), and a smaller line: 200
-for 2, so it locks 32 USDC of our own and not 160 (25 November 2026). Not smaller: 100 orders of 12 units of BTC
+for 2, so it locks 32 USDC of our own and not 160 (25 November 2026). Its terms say surplus where testnet's say profit, as the first pool's do.
+
+If a `deploy` is killed before its `finally` runs, the deployer's wallet stays on big blocks. On any network, including mainnet,
+`spike/.venv/bin/python -m ops.deploy_sim big-blocks-off --network mainnet [--operator deployer] [--send]` switches it back (the same call as the
+`finally`, nothing else; without `--send` it only says what it would do; on mainnet `--send` takes the usual terminal phrase
+and the chain-id check). `ops/deploy_multi.py --big-blocks-off` is testnet only. Not smaller: 100 orders of 12 units of BTC
 (7 USDC each at 58 500) cost about 0.5 USDC at mainnet's book, 5 bp from the oracle, and 5.6 USDC were the book to
 stand at the 150 bp ceiling on the trader's side all run long; both are under the 3 % daily loss of 200, 6 USDC,
 and a breach would end the exam halfway through the measure. Once measured, the pool's line

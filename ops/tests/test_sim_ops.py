@@ -1122,6 +1122,14 @@ class TheMainnetMeasurePlan(unittest.TestCase):
                "Trading exams for measuring fills. Not for sale. Both stages are trading exams on nobody's money; prices "
                "are in USDC.")
     LINE = ("An exam costs the price of its line: 1 000 for 9.", "An exam costs the price of its line: 200 for 2.")
+    # No "profit" in a mainnet plan's terms: the first pool's words for the same places (25 November).
+    OPEN_PROFIT = ("(equity with open profit, taken", "(equity including open positions, taken")
+    TARGET = ("profit target 10 %", "target 10 %")
+
+    @classmethod
+    def mainnet_words(cls, text):
+        text = text.replace(*cls.OPEN_PROFIT).replace(*cls.TARGET)
+        return text.replace("profit", "surplus")
 
     def test_it_is_the_testnet_plan_but_for_its_network_and_its_smaller_line(self):
         raw, old = self.RAW, self.TESTNET
@@ -1137,15 +1145,16 @@ class TheMainnetMeasurePlan(unittest.TestCase):
         self.assertEqual(d.locked_of(old), 160 * 10**6)
         self.assertEqual(old["terms_text"].count(self.OPENING[0]), 1)
         self.assertEqual(old["terms_text"].count(self.LINE[0]), 1)
-        self.assertEqual(raw["terms_text"], old["terms_text"].replace(*self.OPENING).replace(*self.LINE),
-                         "the terms but their opening and the line's price")
+        self.assertEqual(raw["terms_text"], self.mainnet_words(old["terms_text"].replace(*self.OPENING).replace(*self.LINE)),
+                         "the terms but their opening, the line's price and no \"profit\" (surplus, as the first pool's)")
+        self.assertIsNone(re.search(r"invest|profit|simulat|paper", raw["terms_text"] + raw["about"], re.IGNORECASE))
         self.assertNotIn("testnet", (raw["terms_text"] + raw["about"]).lower())
         # Its opening says trading exams where testnet's says a simulated pool and paper exams: the site shows the
         # terms on the pool's page, and says neither word (17 November). The rest is testnet's, word for word.
         self.assertIn("paper exams", old["terms_text"])
         self.assertIsNone(re.search(r"paper|simulat", raw["terms_text"], re.IGNORECASE))
         self.assertEqual("0x" + keccak(text=raw["terms_text"]).hex(),
-                         "0x61be92ac26a257e2681822f0a896b98cb752b1d01495fe63e40a460a04680d8b",
+                         "0xed43e961c9a665416355bbf58765204ab9368f2f200012c3d7adcde751e4bc28",
                          "the terms the mainnet sheet names")
         self.assertEqual(d.locked_of(raw), 32 * 10**6, "two payouts of 8 % of 200")
         self.assertEqual(d.locked_of(raw), 2 * 200 * 10**6 * d.PAYOUT_BPS // 10_000)
@@ -1184,7 +1193,7 @@ class TheMainnetMeasurePlan(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("deploy_sim check: mainnet (chain 999)", said)
         self.assertIn("line             200 for 2 USDC: loss limit 6 %, target 10 %, from the start", said)
-        self.assertIn("payouts a day    2; locks 32 USDC; terms keccak 0x61be92ac26a2", said)
+        self.assertIn("payouts a day    2; locks 32 USDC; terms keccak 0xed43e961c9a6", said)
         self.assertIn("the factory accepts the plan; largest size 200 USDC.", said)
         self.assertIn("the pool opens by an ordinary transaction. Nothing was sent.", said)
         # The assets as `deploy` lists them on mainnet: BTC 0, ETH 1, SOL 5.
