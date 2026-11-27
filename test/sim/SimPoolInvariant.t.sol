@@ -1252,7 +1252,7 @@ contract SimPoolInvariantTest is Test {
             maxIdle: 30 days,
             minTradingDays: 0,
             costPpm: 0,
-            fillDelay: 1,
+            fillDelay: 2,
             fillWindow: 5
         });
     }

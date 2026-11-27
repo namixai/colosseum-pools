@@ -8,6 +8,7 @@ import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPool, SimPlan, SimSize, SimTier, MAX_PAYOUTS_A_DAY, COVER_PAYOUTS} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
+import {StopBook} from "./StopBook.sol";
 
 /// @title SimPoolFactory
 /// @notice Makes simulated pools: both stages are paper exams, nobody's capital is traded, and a
@@ -57,6 +58,11 @@ contract SimPoolFactory {
     /// least 6 months" holds whatever the day it opens. Before it, its creator neither stops its sales nor
     /// takes back what it put in; only the factory's closer may close it, and the money goes where it would anyway.
     uint32 public constant MIN_TERM = 184 days;
+    /// The most assets listed at once (`setAsset`), counting with them each delisted asset the stop book still logs
+    /// (an exam's stop or take on it). The stop book's check of a block logs each asset with a stop or a take on it;
+    /// with this many, its dearest check (the block that closes runs of its tree on many levels) stays under 1 500 000
+    /// gas, a small HyperEVM block with a quarter to spare (`test_gas_poke_atTheCap`).
+    uint256 public constant MAX_LISTED = 16;
     /// How long a creator's request to withdraw waits before it can be carried out, and how long after
     /// closing a pool `finish` waits: the platform, the traders and the codes' partners see every
     /// withdrawal a week before the money moves.
@@ -67,6 +73,10 @@ contract SimPoolFactory {
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;
+    /// The least `fillDelay` of a plan: an order, a stop, and a change of a stop act two blocks after they are sent at
+    /// the earliest, so a trader who knows the next block's price cannot move a stop out of its way (seventh audit of
+    /// cp#335, L1: with one, a change sent a block before a wick is in force in the wick's block).
+    uint16 public constant MIN_FILL_DELAY = 2;
     /// The share of a withdrawal's profit a trading group's code may give its owner (bps), when it gives one.
     uint16 public constant MIN_PARTNER_BPS = 4000;
     uint16 public constant MAX_PARTNER_BPS = 6000;
@@ -83,6 +93,10 @@ contract SimPoolFactory {
     IERC20 public immutable usdc;
     address public immutable examImpl;
     address public immutable poolImpl;
+    /// The book of every stop and take of this factory's exams, made with the factory and never changed: the check
+    /// that carries a stop out in the first block whose oracle price reaches it (`StopBook`). Every exam takes it
+    /// at its start (`PaperExam.stopBook`).
+    StopBook public immutable stopBook;
 
     address public operator;
     address public filler;
@@ -101,6 +115,8 @@ contract SimPoolFactory {
     /// operator, any amount above zero (opening is never free; there is no cap). `create` takes exactly this, so a
     /// creator who read another pays nothing: the call reverts. Declared last, so the slots `ops/deploy_sim.py check` writes stay where they were.
     uint256 public creationFee;
+    /// How many assets are listed (`assetCapX100` not zero), at most `MAX_LISTED`.
+    uint256 public listedAssets;
 
     event OperatorSet(address indexed operator);
     event FillerSet(address indexed filler);
@@ -112,6 +128,8 @@ contract SimPoolFactory {
     event CreationFeeSet(uint256 previous, uint256 fee);
     event PoolCreated(address indexed pool, address indexed creator, uint256 locked);
 
+    /// Listing one more asset would pass `MAX_LISTED`.
+    error TooManyAssets();
     error NotOperator();
     error NotPool();
     error BadRole();
@@ -132,6 +150,7 @@ contract SimPoolFactory {
         usdc = usdc_;
         examImpl = examImpl_;
         poolImpl = poolImpl_;
+        stopBook = new StopBook();
         operator = operator_;
         emit OperatorSet(operator_);
         _setCreationFee(creationFee_);
@@ -142,6 +161,12 @@ contract SimPoolFactory {
     /// @notice The fee of every pool opened from now on; a pool already open paid what it paid and is not touched.
     function setCreationFee(uint256 fee) external onlyOperator {
         _setCreationFee(fee);
+    }
+
+    /// @notice Sets the gas the stop book's check gives a read of the oracle precompile and of the book precompile
+    ///         (`StopBook.setReadGas`, within its bounds), should the chain price them otherwise.
+    function setStopReadGas(uint256 oracle, uint256 bbo) external onlyOperator {
+        stopBook.setReadGas(oracle, bbo);
     }
 
     function setOperator(address operator_) external onlyOperator {
@@ -188,11 +213,31 @@ contract SimPoolFactory {
     }
 
     /// @notice Lists `asset` for new pools with its leverage cap, or delists it with zero. Pools
-    ///         already open keep what they were checked against.
+    ///         already open keep what they were checked against. At most `MAX_LISTED` listed at once, and with them
+    ///         the delisted assets the stop book still logs: it logs every asset with a stop on it each block, and its
+    ///         check must fit a small block.
     function setAsset(uint32 asset, uint32 capX100) external onlyOperator {
         if (capX100 != 0 && (capX100 < 100 || capX100 > MAX_LEVERAGE_X100)) revert BadPlan();
+        uint32 was = assetCapX100[asset];
+        if (was == 0 && capX100 != 0 && ++listedAssets + _loggedUnlisted(asset) > MAX_LISTED) revert TooManyAssets();
+        if (was != 0 && capX100 == 0) --listedAssets;
         assetCapX100[asset] = capX100;
         emit AssetSet(asset, capX100);
+    }
+
+    /// @notice Whether the stop book may start logging `asset` (its first stop or take on it): listed, or, delisted,
+    ///         while the listed assets and the delisted ones it logs already leave a place under `MAX_LISTED`
+    ///         (`StopBook.NoPlaceForAsset`). An asset it logs already, or a listed one, it always takes.
+    function watchable(uint32 asset) external view returns (bool) {
+        return assetCapX100[asset] != 0 || listedAssets + _loggedUnlisted(asset) < MAX_LISTED;
+    }
+
+    /// How many assets the stop book logs that are not listed, `asset` left out.
+    function _loggedUnlisted(uint32 asset) internal view returns (uint256 n) {
+        uint32[] memory w = stopBook.watched();
+        for (uint256 i = 0; i < w.length; ++i) {
+            if (w[i] != asset && assetCapX100[w[i]] == 0) ++n;
+        }
     }
 
     // ── anyone ───────────────────────────────────────────────────
@@ -317,5 +362,6 @@ contract SimPoolFactory {
     function _checkTerms(ExamTerms calldata t) internal pure {
         if (t.stepDuration == 0 || t.maxIdle == 0) revert BadPlan();
         if (t.fillWindow < MIN_FILL_WINDOW || t.fillWindow > MAX_FILL_WINDOW) revert BadPlan();
+        if (t.fillDelay < MIN_FILL_DELAY) revert BadPlan();
     }
 }
